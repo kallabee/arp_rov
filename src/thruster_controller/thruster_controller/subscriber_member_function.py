@@ -31,6 +31,13 @@ from thruster_controller.Focuser import Focuser
 
 from thruster_controller import thruster_rot_conv
 
+from thruster_controller import angle_servo
+
+# from adafruit_servokit import ServoKit
+
+
+num_ch = 10
+
 
 def conv_twist_to_np(t: Twist) -> np.array:
     # t is supposed to be a vector, [x, y, z, wx, wy, wz]
@@ -48,12 +55,11 @@ def conv_twist_to_np(t: Twist) -> np.array:
 
 
 def conv_hand_act_to_np(t: HandActuator) -> np.array:
-    # a = np.array([t.grab, t.roll])
     a = np.array([t.roll, t.grab])
     return a
 
 
-class CamActController:
+class CamActControllerPTZ:
     def __init__(
         self,
         i2c_channel=6,
@@ -63,24 +69,46 @@ class CamActController:
         tilt_center=90,
         tilt_min=-30,
         tilt_max=30,
+        use_cam_act=False,
     ):
-        self.focuser = FocuserWrapper(
-            i2c_channel, pan_center, pan_min, pan_max, tilt_center, tilt_min, tilt_max
-        )
+        """
 
-        self.focus_min = 1800
-        self.zoom_min = 2400
+        Args:
+            i2c_channel (int, optional): Defaults to 6.
+            pan_center (int, optional): [degree]. Defaults to 90.
+            pan_min (int, optional): [degree]. Defaults to -30.
+            pan_max (int, optional): [degree]. Defaults to 30.
+            tilt_center (int, optional): [degree]. Defaults to 90.
+            tilt_min (int, optional): [degree]. Defaults to -30.
+            tilt_max (int, optional): [degree]. Defaults to 30.
+            use_cam_act (bool, optional): When you want to debug this package without camera interfaces connection, set this to False. Defaults to False.
+        """
+        if use_cam_act:
+            self.focuser = FocuserWrapper(
+                i2c_channel,
+                pan_center,
+                pan_min,
+                pan_max,
+                tilt_center,
+                tilt_min,
+                tilt_max,
+            )
+        self.use_cam_act = use_cam_act
+
+        self.focus_min = 1800  # [] (register value)
+        self.zoom_min = 2400  # [] (register value)
 
     def move(self, ca: CameraActuator):
         print(
-            f"pan {ca.pan:+6.1f}, tilt {ca.tilt:+6.1f}, focus {ca.focus:4.2f}, zoom {ca.zoom:4.2f}, ir_cut {ca.ir_cut:1d}"
+            f"Camera : pan {ca.pan:+6.1f}, tilt {ca.tilt:+6.1f}, focus {ca.focus:4.2f}, zoom {ca.zoom:4.2f}, ir_cut {ca.ir_cut:1d}"
         )
 
-        self.move_pan(ca.pan)
-        self.move_tilt(ca.tilt)
-        self.move_focus(ca.focus)
-        self.move_zoom(ca.zoom)
-        self.change_ir_cut(ca.ir_cut)
+        if self.use_cam_act:
+            self.move_pan(ca.pan)
+            self.move_tilt(ca.tilt)
+            self.move_focus(ca.focus)
+            self.move_zoom(ca.zoom)
+            self.change_ir_cut(ca.ir_cut)
 
     def move_pan(self, pan: float):
         p = -90 * pan  # [-90, 90], [deg]
@@ -107,15 +135,25 @@ class ActuatorSubscriber(Node):
         super().__init__("minimal_subscriber")
 
         node_name = "turtle1"
+        history_depth = 10
 
         self.subscription = self.create_subscription(
-            Twist, f"{node_name}/cmd_vel", self.listener_callback_thruster, 10
+            Twist,
+            f"{node_name}/cmd_vel",
+            self.listener_callback_thruster,
+            history_depth,
         )
         self.subscription = self.create_subscription(
-            HandActuator, f"{node_name}/hand_act", self.listener_callback_hand_act, 10
+            HandActuator,
+            f"{node_name}/hand_act",
+            self.listener_callback_hand_act,
+            history_depth,
         )
         self.subscription = self.create_subscription(
-            CameraActuator, f"{node_name}/cam_act", self.listener_callback_cam_act, 10
+            CameraActuator,
+            f"{node_name}/cam_act",
+            self.listener_callback_cam_act,
+            history_depth,
         )
         self.subscription  # prevent unused variable warning
 
@@ -123,9 +161,14 @@ class ActuatorSubscriber(Node):
         self.timer = self.create_timer(timer_period, self.timer_callback)
         self.no_input_duration = 0.05  # [s], When this time elapsed without new command input, start to decay last command amount.
         self.stop_duration = 0.3  # [s]
-        # self.latest_cmd_vel_receive_time = time.perf_counter()
+
         self.nidh_cmd_vel = no_input_duration_handler(
             self, self.no_input_duration, self.stop_duration
+        )
+
+        self.stop_duration_hand_act = 0.1  # [s]
+        self.nidh_hand_acts = no_input_duration_handler(
+            self, self.no_input_duration, self.stop_duration_hand_act
         )
 
         param_path = os.path.join(os.path.dirname(__file__), "thruster_param.yaml")
@@ -133,81 +176,100 @@ class ActuatorSubscriber(Node):
             thruster_rot_conv.thruster_rot_conv.load_param(param_path)
         )
 
+        # Set this value False when you want to debug only camera actuators.
         # self.enable_thrusters = True
-        self.enable_thrusters = (
-            False  # Use this line when you want to debug only camera actuators.
+        self.enable_thrusters = False
+
+        self.reset_servo()
+
+        pan_max = 45
+        tilt_max = 45
+        # self.cac = CamActControllerPTZ(6, 90, -pan_max, pan_max, 90, -tilt_max, tilt_max)
+        self.cac = angle_servo.CamActControllerPT(
+            i2c_channel=6,
+            i2c_addr=0x63,
+            pan_center=90,
+            pan_gain=90 / 180,
+            pan_min=-pan_max,
+            pan_max=pan_max,
+            tilt_center=56,
+            tilt_gain=75 / 180,
+            tilt_min=-tilt_max,
+            tilt_max=tilt_max,
+            use_cam_act=True,
         )
 
+    def reset_servo(self) -> None:
         if self.enable_thrusters:
-            self.kit = ServoKit(address=0x60, channels=16)
+            addr = 0x60  # No.1
+            # addr = 0x61  # No.3
+            self.kit = ServoKit(address=addr, channels=16)
             min_pulse = 1000  # [ms]
-            max_pulse = 2000
-            offset_pulse = -60
+            max_pulse = 2000  # [ms]
+            offset_pulse = -60  # [ms]
             # for i in range(self.tc.get_num()):
-            for i in range(8):
+            for i in range(6 + 2):
                 self.kit.continuous_servo[i].set_pulse_width_range(
                     min_pulse + offset_pulse, max_pulse + offset_pulse
                 )
             self.apply_thrustors(np.zeros((6), dtype=np.float32))
 
-        self.cac = CamActController(6, 90, -45, 45, 90, -45, 45)
+    def set_pwm(self, ch: int, t: float) -> None:
+        # When servo circuit module turns down when someone touchs it, OSError occurs.
+        # Because it stops this program and it is not good, accept this to happen and don't stop the program.
+        try:
+            self.kit.continuous_servo[ch].throttle = t
+        except OSError as e:
+            print(f"{e} at set_pwm()")
+            self.reset_servo()
 
     def apply_thrustors(self, ts: np.array) -> None:
-        # print("apply_thrustors is called.")
+        # self.get_logger().info(
+        #     f"PWM : {ts[0]:+4.1f}, {ts[1]:+4.1f}, {ts[2]:+4.1f}, {ts[3]:+4.1f}, {ts[4]:+4.1f}, {ts[5]:+4.1f}"
+        # )
         if self.enable_thrusters:
             for i, t in enumerate(ts):
-                self.kit.continuous_servo[i].throttle = t
+                self.set_pwm(i, t)
 
-    def handle_hand_acts(self, ha: HandActuator):
-        t = conv_hand_act_to_np(ha)
-        self.get_logger().info(f"grab {ha.grab} , roll {ha.roll}")
+    def apply_hand_acts(self, ha: np.array) -> None:
         if self.enable_thrusters:
             for i in range(2):
-                self.kit.continuous_servo[i + 6].throttle = t[i]
+                self.set_pwm(i + 6, ha[i])
 
-    def handle_cam_acts(self, ca: CameraActuator):
+    def apply_cam_acts(self, ca: CameraActuator) -> None:
+        print("apply_cam_acts called.")
         self.cac.move(ca)
 
     def listener_callback_thruster(self, msg: Twist):
-        print("listener_callback_thruster is called.")
         ts = self.tc.to_all_thrusters(conv_twist_to_np(msg))
-        self.nidh_cmd_vel.update_cmd(ts)
+        self.get_logger().info(
+            f"Thruster : {ts[0]:+4.1f}, {ts[1]:+4.1f}, {ts[2]:+4.1f}, {ts[3]:+4.1f}, {ts[4]:+4.1f}, {ts[5]:+4.1f}"
+        )
 
+        self.nidh_cmd_vel.update_cmd(ts)
         self.apply_thrustors(ts)
-        self.get_logger().info(f"Converted from {msg} to {ts}")
 
     def listener_callback_hand_act(self, msg: HandActuator):
-        self.latest_hand_act_receive_time = time.perf_counter()
-        # ts = self.tc.to_thruster(conv_hand_act_to_np(msg))
-        # self.latest_hand_act = ts
+        self.get_logger().info(f"Hand : grab {msg.grab:+4.1f} , roll {msg.roll:+4.1f}")
 
-        self.handle_hand_acts(msg)
-        # self.get_logger().info(f"Converted from {msg.data} to {ts}")
+        ha = conv_hand_act_to_np(msg)
+        self.nidh_hand_acts.update_cmd(ha)
+        self.apply_hand_acts(ha)
 
     def listener_callback_cam_act(self, msg: CameraActuator):
-        self.handle_cam_acts(msg)
-        # self.get_logger().info(f"Converted from {msg.data} to {ts}")
+        self.apply_cam_acts(msg)
 
     def timer_callback(self):
-        cmd = self.nidh_cmd_vel.handle()
+        cmd = self.nidh_cmd_vel.calc_cmd()
         if cmd is not None:
             self.apply_thrustors(cmd)
 
-        # now = time.perf_counter()
-        # elapsed = now - self.latest_cmd_vel_receive_time
+        cmd_hand = self.nidh_hand_acts.calc_cmd()
+        if cmd_hand is not None:
+            self.apply_hand_acts(cmd_hand)
 
-        # if elapsed > self.no_input_duration and hasattr(self, "latest_command"):
-        #     self.get_logger().info(f"No input is received. So attenuate input.  ")
-        #     t = elapsed - self.no_input_duration
-        #     if t < self.stop_duration:
-        #         ratio = t / self.stop_duration
-        #     else:
-        #         ratio = 0
-        #     new_ts = ratio * self.latest_command
-        #     self.apply_thrustors(new_ts)
-        # else:
-        #     # Do nothing.
-        #     pass
+        # Because camera actuators like pan, tilt, zoom, focus are positions,
+        #   not speeds like thrusters, we don't have to decay them when commands are not received.
 
 
 class no_input_duration_handler:
@@ -221,7 +283,7 @@ class no_input_duration_handler:
         self.latest_cmd_vel_receive_time = now
         self.latest_command = cmd
 
-    def handle(self):
+    def calc_cmd(self):
         if hasattr(self, "latest_command"):
             now = time.perf_counter()
             elapsed = now - self.latest_cmd_vel_receive_time
@@ -237,6 +299,8 @@ class no_input_duration_handler:
                     ratio = 0
                 new_ts = ratio * self.latest_command
                 return new_ts
+            else:
+                return self.latest_command
         else:
             # Do nothing.
             return None
