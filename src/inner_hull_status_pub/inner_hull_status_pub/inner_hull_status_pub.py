@@ -46,7 +46,7 @@ class InnerHullStatusPub(Node):
         )
 
         # Create sensor object, using the board's default I2C bus.
-        i2c_ch6 = busio.I2C(D23, D22)  # I2C ch6
+        i2c_ch6 = busio.I2C(D23, D22)  # I2C at ch6
         self.bme280 = adafruit_bme280.Adafruit_BME280_I2C(i2c_ch6)
 
     def publish(self):

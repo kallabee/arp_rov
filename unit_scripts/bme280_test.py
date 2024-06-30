@@ -7,7 +7,7 @@ from adafruit_blinka.microcontroller.bcm2711.pin import *
 import busio
 # Create sensor object
 
-i2c=busio.I2C(D23, D22) #
+i2c=busio.I2C(D23, D22, frequency=400000) #
 
 # while not i2c.try_lock():
 #     pass

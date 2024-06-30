@@ -55,7 +55,7 @@ def conv_twist_to_np(t: Twist) -> np.array:
 
 
 def conv_hand_act_to_np(t: HandActuator) -> np.array:
-    a = np.array([t.roll, t.grab])
+    a = np.array([-t.roll, t.grab])
     return a
 
 
@@ -177,8 +177,8 @@ class ActuatorSubscriber(Node):
         )
 
         # Set this value False when you want to debug only camera actuators.
-        # self.enable_thrusters = True
-        self.enable_thrusters = False
+        self.enable_thrusters = True
+        # self.enable_thrusters = False
 
         self.reset_servo()
 
@@ -212,6 +212,10 @@ class ActuatorSubscriber(Node):
                 self.kit.continuous_servo[i].set_pulse_width_range(
                     min_pulse + offset_pulse, max_pulse + offset_pulse
                 )
+
+                # Initialize ESC with neutral pulse width.
+                self.kit.continuous_servo[i].throttle = 0
+            time.sleep(8)
             self.apply_thrustors(np.zeros((6), dtype=np.float32))
 
     def set_pwm(self, ch: int, t: float) -> None:
@@ -253,6 +257,7 @@ class ActuatorSubscriber(Node):
         self.get_logger().info(f"Hand : grab {msg.grab:+4.1f} , roll {msg.roll:+4.1f}")
 
         ha = conv_hand_act_to_np(msg)
+        print("hoge")
         self.nidh_hand_acts.update_cmd(ha)
         self.apply_hand_acts(ha)
 

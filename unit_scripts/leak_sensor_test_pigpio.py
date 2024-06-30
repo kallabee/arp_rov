@@ -1,3 +1,4 @@
+import pigpio
 import time
 
 input_gpio_no = 24
