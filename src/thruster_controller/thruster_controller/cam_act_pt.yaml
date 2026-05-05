@@ -1,0 +1,29 @@
+# CamActControllerPT — pan/tilt tuning only (I2C bus/addr: device_i2c.yaml + DeviceRegistry)
+# channel: PCA9685 PWM output index (0–15) for ServoKit
+pan:
+  center: 81
+  min: -45
+  max: 45
+  gain: 0.5
+  sign: 1
+  channel: 0
+
+tilt:
+  center: 82
+  min: -45
+  max: 45
+  # gain: 0.58
+  gain: 0.416666
+  sign: -1
+  channel: 15
+
+use_cam_act: true
+
+# Raspberry Pi Camera v3 focus control via libcamera/picamera2 (optional)
+focus:
+  enabled: false
+  # continuous|auto|manual|off
+  af_mode: continuous
+  # used when af_mode is manual/off and mapping CameraActuator.focus (0..1) -> LensPosition
+  lens_position_min: 0.0
+  lens_position_max: 10.0

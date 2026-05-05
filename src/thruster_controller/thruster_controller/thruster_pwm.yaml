@@ -1,0 +1,19 @@
+# PCA9685 configuration for thrusters / hand actuators.
+#
+# Channel mapping:
+# - thrusters: 6 channels (thruster index 0..5 in code)
+# - hand: 2 channels (roll, grab) used by HandActuator
+#
+# Current wiring uses channels 4..11.
+
+channels:
+  thrusters: [4, 5, 6, 7, 8, 9]
+  hand: [10, 11]
+
+# Pulse calibration (microseconds).
+pulse:
+  min_us: 1000
+  max_us: 2000
+  offset_us: -20
+  arm_delay_s: 8.0
+

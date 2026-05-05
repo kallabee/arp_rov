@@ -15,6 +15,7 @@
 
 import os
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -26,17 +27,88 @@ from hand_actuator_interfaces.msg import HandActuator
 
 from adafruit_servokit import ServoKit
 
-from thruster_controller.FocuserWrapper import FocuserWrapper
-from thruster_controller.Focuser import Focuser
+from device_registry import DeviceRegistry
 
 from thruster_controller import thruster_rot_conv
-
-from thruster_controller import angle_servo
+from thruster_controller.cam_act_config import CamActPTConfig
+from thruster_controller.cam_act_controllers import CamActControllerBase, CamActControllerPT
 
 # from adafruit_servokit import ServoKit
 
 
 num_ch = 10
+
+
+def _resolve_cam_act_pt_yaml() -> Path:
+    """Prefer workspace src YAML during development, fallback to installed package file."""
+    # 1) Walk up from cwd: <ws>/src/thruster_controller/thruster_controller/cam_act_pt.yaml
+    cwd = Path.cwd().resolve()
+    for base in (cwd, *cwd.parents):
+        cand = (
+            base
+            / "src"
+            / "thruster_controller"
+            / "thruster_controller"
+            / "cam_act_pt.yaml"
+        )
+        if cand.is_file():
+            return cand
+
+    # 2) Fallback to the YAML next to this module (installed layout).
+    return Path(__file__).resolve().parent / "cam_act_pt.yaml"
+
+
+def _resolve_thruster_pwm_yaml() -> Path:
+    """Prefer workspace src YAML during development, fallback to installed package file."""
+    cwd = Path.cwd().resolve()
+    for base in (cwd, *cwd.parents):
+        cand = (
+            base
+            / "src"
+            / "thruster_controller"
+            / "thruster_controller"
+            / "thruster_pwm.yaml"
+        )
+        if cand.is_file():
+            return cand
+    return Path(__file__).resolve().parent / "thruster_pwm.yaml"
+
+
+def _load_thruster_pwm_config(path: Path) -> tuple[list[int], list[int], int, int, int, float]:
+    import yaml
+
+    with path.open("r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f)
+    if not isinstance(raw, dict):
+        raise ValueError(f"Top-level YAML must be a mapping: {path}")
+    channels = raw.get("channels")
+    pulse = raw.get("pulse")
+    if not isinstance(channels, dict):
+        raise ValueError(f"{path}: 'channels' must be a mapping")
+    if not isinstance(pulse, dict):
+        raise ValueError(f"{path}: 'pulse' must be a mapping")
+
+    thr = channels.get("thrusters")
+    hand = channels.get("hand")
+    if not (isinstance(thr, list) and len(thr) == 6 and all(isinstance(x, int) for x in thr)):
+        raise ValueError(f"{path}: 'thrusters' must be a list of 6 ints (0..15)")
+    if not (isinstance(hand, list) and len(hand) == 2 and all(isinstance(x, int) for x in hand)):
+        raise ValueError(f"{path}: 'hand' must be a list of 2 ints (0..15)")
+    for x in [*thr, *hand]:
+        if x < 0 or x > 15:
+            raise ValueError(f"{path}: channel must be 0..15, got {x}")
+    if len(set([*thr, *hand])) != 8:
+        raise ValueError(f"{path}: thrusters+hand channels must be unique: {thr}+{hand}")
+
+    min_us = int(pulse.get("min_us", 1000))
+    max_us = int(pulse.get("max_us", 2000))
+    off_us = int(pulse.get("offset_us", 0))
+    arm_delay_s = float(pulse.get("arm_delay_s", 8.0))
+    if min_us <= 0 or max_us <= 0 or min_us >= max_us:
+        raise ValueError(f"{path}: invalid min/max pulse: {min_us}, {max_us}")
+    if arm_delay_s < 0:
+        raise ValueError(f"{path}: arm_delay_s must be >= 0")
+    return thr, hand, min_us, max_us, off_us, arm_delay_s
 
 
 def conv_twist_to_np(t: Twist) -> np.array:
@@ -57,77 +129,6 @@ def conv_twist_to_np(t: Twist) -> np.array:
 def conv_hand_act_to_np(t: HandActuator) -> np.array:
     a = np.array([-t.roll, t.grab])
     return a
-
-
-class CamActControllerPTZ:
-    def __init__(
-        self,
-        i2c_channel=6,
-        pan_center=90,
-        pan_min=-30,
-        pan_max=30,
-        tilt_center=90,
-        tilt_min=-30,
-        tilt_max=30,
-        use_cam_act=False,
-    ):
-        """
-
-        Args:
-            i2c_channel (int, optional): Defaults to 6.
-            pan_center (int, optional): [degree]. Defaults to 90.
-            pan_min (int, optional): [degree]. Defaults to -30.
-            pan_max (int, optional): [degree]. Defaults to 30.
-            tilt_center (int, optional): [degree]. Defaults to 90.
-            tilt_min (int, optional): [degree]. Defaults to -30.
-            tilt_max (int, optional): [degree]. Defaults to 30.
-            use_cam_act (bool, optional): When you want to debug this package without camera interfaces connection, set this to False. Defaults to False.
-        """
-        if use_cam_act:
-            self.focuser = FocuserWrapper(
-                i2c_channel,
-                pan_center,
-                pan_min,
-                pan_max,
-                tilt_center,
-                tilt_min,
-                tilt_max,
-            )
-        self.use_cam_act = use_cam_act
-
-        self.focus_min = 1800  # [] (register value)
-        self.zoom_min = 2400  # [] (register value)
-
-    def move(self, ca: CameraActuator):
-        print(
-            f"Camera : pan {ca.pan:+6.1f}, tilt {ca.tilt:+6.1f}, focus {ca.focus:4.2f}, zoom {ca.zoom:4.2f}, ir_cut {ca.ir_cut:1d}"
-        )
-
-        if self.use_cam_act:
-            self.move_pan(ca.pan)
-            self.move_tilt(ca.tilt)
-            self.move_focus(ca.focus)
-            self.move_zoom(ca.zoom)
-            self.change_ir_cut(ca.ir_cut)
-
-    def move_pan(self, pan: float):
-        p = -90 * pan  # [-90, 90], [deg]
-        self.focuser.set(Focuser.OPT_MOTOR_X, p)
-
-    def move_tilt(self, tilt: float):
-        t = -90 * tilt  # [-90, 90], [deg]
-        self.focuser.set(Focuser.OPT_MOTOR_Y, t)
-
-    def move_focus(self, focus: float):
-        f = int((20000 - self.focus_min) * (1 - focus) + self.focus_min)
-        self.focuser.set(Focuser.OPT_FOCUS, f)
-
-    def move_zoom(self, zoom: float):
-        z = int((20000 - self.zoom_min) * zoom + self.zoom_min)
-        self.focuser.set(Focuser.OPT_ZOOM, z)
-
-    def change_ir_cut(self, ir_cut):
-        self.focuser.set(Focuser.OPT_IRCUT, ir_cut == 1)
 
 
 class ActuatorSubscriber(Node):
@@ -180,42 +181,47 @@ class ActuatorSubscriber(Node):
         self.enable_thrusters = True
         # self.enable_thrusters = False
 
+        reg = DeviceRegistry.from_src_default()
+
+        # Thruster PWM board (PCA9685) for continuous servos / ESCs.
+        d_thr = reg.get_i2c("thruster_pwm")
+        self.thruster_pwm_addr = d_thr.addr
+        thr_pwm_yaml = _resolve_thruster_pwm_yaml()
+        (
+            self.thruster_channels,
+            self.hand_channels,
+            self.thr_min_pulse_us,
+            self.thr_max_pulse_us,
+            self.thr_offset_pulse_us,
+            self.thr_arm_delay_s,
+        ) = _load_thruster_pwm_config(thr_pwm_yaml)
+
         self.reset_servo()
 
-        pan_max = 45
-        tilt_max = 45
-        # self.cac = CamActControllerPTZ(6, 90, -pan_max, pan_max, 90, -tilt_max, tilt_max)
-        self.cac = angle_servo.CamActControllerPT(
-            i2c_channel=6,
-            i2c_addr=0x63,
-            pan_center=90,
-            pan_gain=90 / 180,
-            pan_min=-pan_max,
-            pan_max=pan_max,
-            tilt_center=56,
-            tilt_gain=75 / 180,
-            tilt_min=-tilt_max,
-            tilt_max=tilt_max,
-            use_cam_act=True,
+        pt_yaml = _resolve_cam_act_pt_yaml()
+        pt_cfg = CamActPTConfig.load(pt_yaml)
+        d = reg.get_i2c("cam_act")
+        if d.linux_bus is None:
+            raise ValueError("device cam_act requires 'bus' in device_i2c.yaml")
+        # PTZ: load cam_act_ptz.yaml and use CamActControllerPTZ(ptz_cfg, linux_bus=d.linux_bus)
+        self.cac: CamActControllerBase = CamActControllerPT(
+            pt_cfg, linux_bus=d.linux_bus, i2c_addr=d.addr
         )
 
     def reset_servo(self) -> None:
         if self.enable_thrusters:
-            addr = 0x60  # No.1
-            # addr = 0x61  # No.3
-            self.kit = ServoKit(address=addr, channels=16)
-            min_pulse = 1000  # [ms]
-            max_pulse = 2000  # [ms]
-            offset_pulse = -60  # [ms]
-            # for i in range(self.tc.get_num()):
-            for i in range(6 + 2):
+            self.kit = ServoKit(address=self.thruster_pwm_addr, channels=16)
+            min_pulse = self.thr_min_pulse_us  # [us]
+            max_pulse = self.thr_max_pulse_us  # [us]
+            offset_pulse = self.thr_offset_pulse_us  # [us]
+            for i in self.thruster_channels + self.hand_channels:
                 self.kit.continuous_servo[i].set_pulse_width_range(
                     min_pulse + offset_pulse, max_pulse + offset_pulse
                 )
 
                 # Initialize ESC with neutral pulse width.
                 self.kit.continuous_servo[i].throttle = 0
-            time.sleep(8)
+            time.sleep(self.thr_arm_delay_s)
             self.apply_thrustors(np.zeros((6), dtype=np.float32))
 
     def set_pwm(self, ch: int, t: float) -> None:
@@ -233,12 +239,12 @@ class ActuatorSubscriber(Node):
         # )
         if self.enable_thrusters:
             for i, t in enumerate(ts):
-                self.set_pwm(i, t)
+                self.set_pwm(self.thruster_channels[i], t)
 
     def apply_hand_acts(self, ha: np.array) -> None:
         if self.enable_thrusters:
             for i in range(2):
-                self.set_pwm(i + 6, ha[i])
+                self.set_pwm(self.hand_channels[i], ha[i])
 
     def apply_cam_acts(self, ca: CameraActuator) -> None:
         print("apply_cam_acts called.")

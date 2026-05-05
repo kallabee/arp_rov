@@ -1,20 +1,28 @@
 ﻿import angle_servo
+from pathlib import Path
+
+from device_registry import DeviceRegistry
+from thruster_controller.cam_act_config import CamActPTConfig
 
 
 def test():
-    s = angle_servo.CamActControllerPT(
-        i2c_channel=6,
-        i2c_addr=0x63,
-        pan_center=90,
-        pan_gain=90 / 180,
-        pan_min=-45,
-        pan_max=45,
-        tilt_center=56,
-        tilt_gain=75 / 180,
-        tilt_min=-45,
-        tilt_max=45,
-        use_cam_act=True,
-    )
+    reg = DeviceRegistry.from_src_default()
+    d = reg.get_i2c("cam_act")
+    if d.linux_bus is None:
+        raise ValueError("device cam_act requires 'bus' in device_i2c.yaml")
+
+    cam_cls = getattr(angle_servo, "CamActControllerPT", None)
+    if cam_cls is None:
+        print(
+            "CamActControllerPT is not available (see thruster_controller.cam_act_controllers). "
+            f"Registry I2C: bus={d.linux_bus} addr=0x{d.addr:02x}"
+        )
+        return
+
+    cfg_path = Path(__file__).resolve().parent / "cam_act_pt.yaml"
+    cfg = CamActPTConfig.load(cfg_path)
+
+    s = cam_cls(cfg, linux_bus=d.linux_bus, i2c_addr=d.addr)
 
     k = 0
     p = 0

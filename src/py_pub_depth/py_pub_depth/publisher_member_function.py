@@ -17,6 +17,7 @@ from rclpy.node import Node
 
 from depth_sensor_interfaces.msg import Depth
 
+from device_registry import DeviceRegistry
 from py_pub_depth import ms5837
 
 
@@ -27,7 +28,11 @@ class MinimalPublisher(Node):
         timer_period = 1.0  # seconds
         self.timer = self.create_timer(timer_period, self.timer_callback)
 
-        self.sensor = ms5837.MS5837_30BA(bus=6)  # Specify I2C bus
+        reg = DeviceRegistry.from_src_default()
+        i2c = reg.get_i2c("depth_sensor")
+        if i2c.linux_bus is None:
+            raise ValueError("device depth_sensor requires 'bus' in device_i2c.yaml")
+        self.sensor = ms5837.MS5837_30BA(bus=i2c.linux_bus, i2c_addr=i2c.addr)
 
         # We must initialize the sensor before reading it
         if not self.sensor.init():

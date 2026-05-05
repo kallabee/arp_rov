@@ -1,0 +1,16 @@
+# CamActControllerPTZ — pan/tilt tuning only (I2C bus: device_i2c.yaml + DeviceRegistry)
+pan:
+  center: 90
+  min: -30
+  max: 30
+
+tilt:
+  center: 90
+  min: -30
+  max: 30
+
+use_cam_act: true
+
+# Optional register defaults (Focuser)
+focus_min: 1800
+zoom_min: 2400

@@ -8,19 +8,24 @@ from adafruit_servokit import ServoKit
 # Set channels to the number of servo channels on your kit.
 # 8 for FeatherWing, 16 for Shield/HAT/Bonnet.
 # kit = ServoKit(channels=8)
-kit = ServoKit(channels=16)
+addr = 0x73  # No.1
+# addr = 0x62
+# addr = 0x63
+# addr = 0x61  # No.3
+kit = ServoKit(address=addr, channels=16)
 
 def set_pulse_width_range_all(min,max):
-    kit.continuous_servo[0].set_pulse_width_range(min, max)
-    kit.continuous_servo[1].set_pulse_width_range(min, max)
+    for i in range(16):
+        kit.continuous_servo[i].set_pulse_width_range(min, max)
+
 
 def set_throttle(t):
-    kit.continuous_servo[0].throttle = t
-    kit.continuous_servo[1].throttle = t
+    for i in range(16):
+        kit.continuous_servo[i].throttle = t
 
 min_pulse = 1000
 max_pulse =2000
-offset_pulse = -60
+offset_pulse = -20
 set_pulse_width_range_all(min_pulse+offset_pulse, max_pulse+offset_pulse)
 
 while True:

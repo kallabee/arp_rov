@@ -1,0 +1,59 @@
+# Central I2C map: one entry per logical device (shared across ROS packages).
+# Keys: stable device id -> { bus?, addr }
+# - addr: 7-bit address (decimal or 0xNN)
+# - bus: Linux I2C adapter index (N in /dev/i2c-N), optional
+#
+# Values match this repo where possible; change bus/addr for your wiring.
+
+
+## Actuator
+
+# PCA9685: pan/tilt & camera actuator
+thruster_pwm:
+  bus: 1
+  addr: 0x73
+
+cam_act:
+  bus: 1
+  addr: 0x74
+
+# Light PCA9685
+light_pwm:
+  bus: 1
+  addr: 0x60
+
+
+## Sensor
+
+lsm9ds1_accel_gyro:
+  bus: 3
+  addr: 0x6A
+
+lsm9ds1_mag:
+  bus: 3
+  addr: 0x1C
+
+# --- Depth / pressure (MS5837) ---
+depth_sensor:
+  bus: 3
+  addr: 0x76
+
+# --- Current monitor (INA226) ---
+# unit_scripts/current_sensor.py, ina226_example.py use bus 3 @ 0x40
+ina226_current:
+  bus: 3
+  addr: 0x40
+
+# --- ADC (ADS1015; inner_hull water leak on board SCL/SDA → often i2c-1) ---
+ads1015:
+  bus: 3
+  addr: 0x48
+
+# --- Environmental (BME280; inner_hull uses bitbang I2C ch6 → i2c-6) ---
+# I2C addr 0x77 vs 0x76 is SDO pin; bmp280_test2 in unit_scripts used 0x76 on ch3
+bme280:
+  bus: 3
+  addr: 0x77
+
+# --- 9DoF (LSM9DS1 on SMBus; accelerometer.py defaults to bus 1) ---
+# One chip, two I2C endpoints (see py_pub_lsm9ds1/LSM9DS1.py)
