@@ -26,22 +26,22 @@ light_pwm:
 ## Sensor
 
 lsm9ds1_accel_gyro:
-  bus: 3
+  bus: 2
   addr: 0x6A
 
 lsm9ds1_mag:
-  bus: 3
+  bus: 2
   addr: 0x1C
 
 # --- Depth / pressure (MS5837) ---
 depth_sensor:
-  bus: 3
+  bus: 2
   addr: 0x76
 
 # --- Current monitor (INA226) ---
 # unit_scripts/current_sensor.py, ina226_example.py use bus 3 @ 0x40
 ina226_current:
-  bus: 3
+  bus: 2
   addr: 0x40
 
 # --- ADC (ADS1015; inner_hull water leak on board SCL/SDA → often i2c-1) ---
@@ -49,11 +49,16 @@ ads1015:
   bus: 3
   addr: 0x48
 
+# Hull sensors: thermocouple + water leak (unit_scripts on /dev/i2c-2 @ 0x49)
+ads1015_hull:
+  bus: 2
+  addr: 0x49
+
 # --- Environmental (BME280; inner_hull uses bitbang I2C ch6 → i2c-6) ---
 # I2C addr 0x77 vs 0x76 is SDO pin; bmp280_test2 in unit_scripts used 0x76 on ch3
 bme280:
-  bus: 3
+  bus: 2
   addr: 0x77
 
 # --- 9DoF (LSM9DS1 on SMBus; accelerometer.py defaults to bus 1) ---
-# One chip, two I2C endpoints (see py_pub_lsm9ds1/LSM9DS1.py)
+# One chip, two I2C endpoints (see monitor_value_lib/sensors/lsm9ds1_i2c/LSM9DS1.py)

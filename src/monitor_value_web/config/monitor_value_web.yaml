@@ -1,0 +1,52 @@
+http:
+  host: 0.0.0.0
+  port: 8080
+
+topics:
+  monitor: rov/monitor_value
+  imu_snapshot: rov/imu_nav/snapshot
+
+stale_sec: 3.0
+imu_min_interval_sec: 0.1
+
+temperatures:
+  - key: bme_temp_c
+    nickname: MiscBoard_BME
+  - key: thermocouple_ch2_temp_c
+    nickname: RearCap
+  - key: thermocouple_ch3_temp_c
+    nickname: NC
+  - key: ds18b20_ch0_temp_c
+    nickname: NoseDisk
+  - key: ds18b20_ch1_temp_c
+    nickname: ESC_Plate
+  - key: depth_temp_c
+    nickname: Water
+  - key: rpi_cpu_temp_c
+    nickname: RPi CPU
+
+# Shared scale for every temperature thermometer / depth-temp dial.
+temperature_gauge:
+  min: 0
+  max: 80
+  warn: 60
+  alarm: 75
+
+leaks:
+  - channel: 0
+    nickname: Nose
+  - channel: 1
+    nickname: RearBottom
+
+gauges:
+  voltage_v: { min: 9, max: 16.8, warn: 11.5, alarm: 10.5, low_bad: true }
+  remaining_percent: { min: 0, max: 100, warn: 25, alarm: 15, low_bad: true }
+  depth_m: { min: 0, max: 30 }
+  depth_pressure_atm: { min: 0.8, max: 4.0 }
+  current_a: { min: 0, max: 25 }
+  power_w: { min: 0, max: 200 }
+  rpi_cpu_util_percent: { min: 0, max: 100, warn: 85, alarm: 95 }
+  rpi_gpu_util_percent: { min: 0, max: 100, warn: 85, alarm: 95 }
+  rpi_fan_rpm: { min: 0, max: 8000 }
+  bme_humidity_percent: { min: 0, max: 100, warn: 80, alarm: 90 }
+  bme_pressure_atm: { min: 0.8, max: 1.2 }

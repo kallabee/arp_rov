@@ -1,0 +1,71 @@
+# IMU + depth fusion (imu_navigation). ROS-independent; consumed by monitor_value_pub / logger.
+#
+# --- Timing (this file) ---
+# fusion_hz        : FusionRunner ``step()`` target rate (Hz) when using ``run_forever`` or real-time pacing.
+# depth_hz         : Depth sample rate target; internally ``depth_interval = round(fusion_hz / depth_hz)``.
+# on_depth_invalid : ``nine_axis_continue`` (default) = IMU step always runs; NaN depth skips z-blend only.
+#                      ``skip_fusion_step`` = on a scheduled depth read that returns NaN, skip the whole
+#                      fusion tick (orientation / velocity / position unchanged; fusion clock not advanced).
+#
+# --- Logger / ROS aggregator (different file) ---
+# ``sample_interval_seconds`` is in ``monitor_value_pub/config/monitor_value.yaml`` (and monitor_value_lib
+# copy): period of ``rov/monitor_value`` and CSV rows; IMU may run faster via ``imu_nav`` embed or separate node.
+#
+fusion_hz: 50.0
+depth_hz: 5.0
+depth_z_blend: 0.05
+# nine_axis_continue | skip_fusion_step (aliases: skip, skip_step)
+on_depth_invalid: nine_axis_continue
+filter: complementary
+complementary_alpha: 0.98
+madgwick_beta: 0.1
+# Optional static gyro bias [rad/s] after stationary calibration (e.g. from unit_tests).
+# gyro_bias_rad_s: [0.0, 0.0, 0.0]
+ukf_alpha: 0.08
+ukf_beta: 2.0
+ukf_kappa: 0.0
+
+# Extrinsics: child sensor frame expressed relative to the IMU frame (position [m], rpy [deg]).
+extrinsics:
+  imu:
+    position_m: [0.0, 0.0, 0.0]
+    rpy_deg: [0.0, 0.0, 0.0]
+  depth:
+    position_m: [0.0, 0.0, 0.0]
+    rpy_deg: [0.0, 0.0, 0.0]
+  mag:
+    position_m: [0.0, 0.0, 0.0]
+    rpy_deg: [0.0, 0.0, 0.0]
+
+# Legacy fixed offsets (seconds). Prefer ``ImuNavSnapshot.imu_sample_time_sec`` /
+# ``depth_sample_time_sec`` (host wall clock at end of each I2C read) for measured skew.
+time_offsets_sec:
+  depth: 0.0
+  mag: 0.0
+
+sensors:
+  dof9:
+    mode: enabled_if_can
+    type: lsm9ds1
+    use_device_registry: true
+    device_id: lsm9ds1_accel_gyro
+  depth:
+    mode: enabled_if_can
+    device_id: depth_sensor
+    model: 30BA
+
+robot_localization:
+  publish_imu: true
+  publish_odom: true
+  imu_frame_id: imu_link
+  base_frame_id: base_link
+  odom_frame_id: odom
+  publish_static_tf: true
+
+# robot_localization (ekf_node) example inputs from this node:
+#   imu0: /imu/data
+#   imu0_config: [true,  true,  true,   # orientation
+#                 false, false, false,  # angular velocity (set true if fusing gyro)
+#                 false, false, false]  # linear acceleration
+#   odom0: /imu/dead_reckon_odom
+# Tune covariances in ``ros_node.py`` or extend YAML as needed.

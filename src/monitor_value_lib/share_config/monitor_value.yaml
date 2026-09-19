@@ -1,0 +1,56 @@
+# Default config for monitor_value_lib
+log_dir: ./log/monitor_value
+log_rotate_seconds: 1800
+sample_interval_seconds: 1.0
+
+imu_frame_id: imu_link
+
+imu_nav:
+  snapshot_topic: "rov/imu_nav/snapshot"
+  embed_runner: false
+
+sensors:
+  rpi:
+    mode: enabled
+
+  bme280:
+    mode: enabled_if_can
+    # If you are using Blinka bitbang I2C like inner_hull_status_pub, set these.
+    # Otherwise leave null to use board.SCL/board.SDA.
+    i2c_bitbang:
+      enabled: false
+      scl_pin: D23
+      sda_pin: D22
+
+  current_monitor:
+    mode: enabled_if_can
+    type: ina226
+    device_id: ina226_current
+    shunt_ohms: 0.01
+    max_expected_amps: 25.0
+    capacity_wh: 72.0
+
+  # ADS1015 @ bus 2 / 0x49 (unit_scripts: thermocouple_ad8495_test, water_leak_sensor_analog_test)
+  thermocouple_adc:
+    mode: enabled_if_can
+    device_id: ads1015_hull
+    adc_channels: [2, 3]
+    vref_v: 1.25  # AD8495 reference [V]; same as thermocouple_ad8495_test.py
+
+  ds18b20:
+    mode: enabled_if_can
+    gpios: [17, 27]
+    rescan_interval_sec: 10.0
+
+  water_leak:
+    mode: enabled_if_can
+    device_id: ads1015_hull
+    channels:
+      - adc_channel: 0
+        threshold_v: 3.0
+        monitor_index: 0
+      - adc_channel: 1
+        threshold_v: 3.0
+        monitor_index: 1
+
+  # depth / dof9 / pose: fused in ``imu_navigation``; monitor_value_pub merges snapshots.

@@ -1,0 +1,56 @@
+# Default config for monitor_value_pub (same schema as monitor_value_lib)
+log_dir: ./log/monitor_value
+log_rotate_seconds: 1800
+sample_interval_seconds: 1.0
+
+imu_frame_id: imu_link
+
+# High-rate IMU + depth fusion lives in package ``imu_navigation``.
+# Run ``ros2 run imu_navigation imu_nav_node`` or set ``embed_runner: true`` to fuse in-process.
+imu_nav:
+  snapshot_topic: "rov/imu_nav/snapshot"
+  embed_runner: false
+  # runner_config_path: ""
+
+sensors:
+  rpi:
+    mode: enabled
+
+  bme280:
+    mode: enabled_if_can
+    i2c_bitbang:
+      enabled: true
+      scl_pin: D23
+      sda_pin: D22
+
+  current_monitor:
+    mode: enabled_if_can
+    type: ina226
+    device_id: ina226_current
+    shunt_ohms: 0.01
+    max_expected_amps: 25.0
+    capacity_wh: 72.0
+
+  # dof9 / depth / pose: see imu_navigation package (collector does not own IMU).
+
+  thermocouple_adc:
+    mode: enabled_if_can
+    device_id: ads1015_hull
+    adc_channels: [2, 3]
+    vref_v: 1.25
+
+  ds18b20:
+    mode: enabled_if_can
+    gpios: [17, 27]
+    rescan_interval_sec: 10.0
+
+  water_leak:
+    mode: enabled_if_can
+    device_id: ads1015_hull
+    channels:
+      - adc_channel: 0
+        threshold_v: 3.0
+        monitor_index: 0
+      - adc_channel: 1
+        threshold_v: 3.0
+        monitor_index: 1
