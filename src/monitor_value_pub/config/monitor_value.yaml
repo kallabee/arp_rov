@@ -3,6 +3,9 @@ log_dir: ./log/monitor_value
 log_rotate_seconds: 1800
 sample_interval_seconds: 1.0
 
+# TensorBoard is written by monitor_value_logger (default on there).
+tensorboard_enabled: true
+
 imu_frame_id: imu_link
 
 # High-rate IMU + depth fusion lives in package ``imu_navigation``.

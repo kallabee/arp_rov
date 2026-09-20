@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
 
 import yaml
 
@@ -67,6 +67,9 @@ class MonitorValueConfig:
     imu_frame_id: str
     sensors: Dict[str, Dict[str, Any]]
     imu_nav: Dict[str, Any] = field(default_factory=dict)
+    # TensorBoard event files (view with: tensorboard --logdir <tensorboard_log_dir>)
+    tensorboard_enabled: bool = True
+    tensorboard_log_dir: Optional[Path] = None
 
     def sensor_flags(self, sensor_id: str) -> SensorFlags:
         s = self.sensors.get(sensor_id, {}) if isinstance(self.sensors, dict) else {}
@@ -105,6 +108,19 @@ def load_config(path: str | Path) -> MonitorValueConfig:
     if not isinstance(imu_nav, dict):
         raise ValueError("imu_nav must be a mapping when present")
 
+    # Default: TensorBoard on. Explicit false / 0 / "off" disables.
+    tb_raw = raw.get("tensorboard_enabled", True)
+    if isinstance(tb_raw, str):
+        tensorboard_enabled = tb_raw.strip().lower() not in ("0", "false", "no", "off", "")
+    else:
+        tensorboard_enabled = bool(tb_raw)
+
+    tb_dir_raw = raw.get("tensorboard_log_dir", None)
+    if tb_dir_raw is None or str(tb_dir_raw).strip() == "":
+        tensorboard_log_dir: Optional[Path] = log_dir / "tb"
+    else:
+        tensorboard_log_dir = Path(str(tb_dir_raw))
+
     return MonitorValueConfig(
         log_dir=log_dir,
         log_rotate_seconds=log_rotate_seconds,
@@ -112,4 +128,6 @@ def load_config(path: str | Path) -> MonitorValueConfig:
         imu_frame_id=imu_frame_id,
         sensors=sensors,
         imu_nav=copy.deepcopy(imu_nav),
+        tensorboard_enabled=tensorboard_enabled,
+        tensorboard_log_dir=tensorboard_log_dir,
     )

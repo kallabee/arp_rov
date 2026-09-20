@@ -11,6 +11,7 @@ from rclpy.node import Node
 from monitor_value_interfaces.msg import MonitorValue
 from monitor_value_lib.config import load_config
 from monitor_value_lib.logger.csv_rotating_logger import RotatingCsvLogger
+from monitor_value_lib.logger.tensorboard_logger import TensorboardLogger
 from monitor_value_lib.values import MonitorValues
 
 
@@ -97,18 +98,43 @@ class MonitorValueLogger(Node):
             rotate_seconds=float(cfg.log_rotate_seconds),
             flush_each_row=True,
         )
+        self._tb_logger: TensorboardLogger | None = None
+        self._tb_warned = False
+        if bool(getattr(cfg, "tensorboard_enabled", True)):
+            tb_dir = Path(cfg.tensorboard_log_dir) if cfg.tensorboard_log_dir else Path(cfg.log_dir) / "tb"
+            self._tb_logger = TensorboardLogger(log_dir=tb_dir, flush_every_n=1)
+
         self._sub = self.create_subscription(MonitorValue, "rov/monitor_value", self._on_msg, 10)
         self.get_logger().info(f"config: {cfg_path}")
         self.get_logger().info(f"log_dir: {cfg.log_dir} rotate_sec: {cfg.log_rotate_seconds}")
+        if self._tb_logger is not None:
+            self.get_logger().info(
+                f"tensorboard: enabled log_dir={self._tb_logger.log_dir} "
+                "(view: tensorboard --logdir <that> --host 0.0.0.0)"
+            )
+        else:
+            self.get_logger().info("tensorboard: disabled")
 
     def _on_msg(self, msg: MonitorValue) -> None:
         v = _msg_to_values(msg)
         self._csv_logger.append(v)
+        if self._tb_logger is not None:
+            self._tb_logger.append(v)
+            if self._tb_logger.disabled_reason and not self._tb_warned:
+                self._tb_warned = True
+                self.get_logger().warning(
+                    f"tensorboard disabled at runtime: {self._tb_logger.disabled_reason}"
+                )
 
     def destroy_node(self):
         try:
             self._csv_logger.close()
         finally:
+            if self._tb_logger is not None:
+                try:
+                    self._tb_logger.close()
+                except Exception:
+                    pass
             super().destroy_node()
 
 

@@ -1,3 +1,9 @@
 # Config for monitor_value_logger (subset of monitor_value_lib schema)
 log_dir: ./log/monitor_value
 log_rotate_seconds: 1800
+
+# TensorBoard event files under <log_dir>/tb/<run_id>/ (default: enabled).
+# View: tensorboard --logdir ./log/monitor_value/tb --host 0.0.0.0 --port 6006
+# Disable with: tensorboard_enabled: false
+tensorboard_enabled: true
+# tensorboard_log_dir: ./log/monitor_value/tb

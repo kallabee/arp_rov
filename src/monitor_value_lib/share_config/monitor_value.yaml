@@ -3,6 +3,10 @@ log_dir: ./log/monitor_value
 log_rotate_seconds: 1800
 sample_interval_seconds: 1.0
 
+# TensorBoard (consumed by monitor_value_logger; default on)
+tensorboard_enabled: true
+# tensorboard_log_dir: ./log/monitor_value/tb
+
 imu_frame_id: imu_link
 
 imu_nav:
