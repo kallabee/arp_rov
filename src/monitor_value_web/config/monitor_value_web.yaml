@@ -41,6 +41,17 @@ cameras:
     extra_args: ["--no-audio-device", "p2p"]
     restart: false
     state_path: /tmp/rov_camera_state.json
+  # Record whenever a camera is streaming. fMP4 flushes every `part`, so a
+  # sudden shutdown loses about that much. Files rotate every `segment`.
+  # Oldest files are deleted when remaining disk space falls below min_free.
+  record:
+    enabled: true
+    dir: /home/arp/mediamtx/recordings
+    segment: 10m
+    part: 1s
+    min_free: 10G
+    check_sec: 15
+    protect_recent_sec: 20
   items:
     - id: cam0
       path: cam0

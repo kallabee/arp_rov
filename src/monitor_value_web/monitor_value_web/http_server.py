@@ -22,6 +22,7 @@ from monitor_value_web.command import (
     zero_twist,
 )
 from monitor_value_web.config import load_web_config, public_config
+from monitor_value_web.record import RecordingJanitor
 
 PublishFn = Callable[[dict[str, dict[str, float]]], None]
 
@@ -57,6 +58,8 @@ class DashboardState:
         self._camera_cache: Optional[dict[str, Any]] = None
         self._camera_cache_mono = 0.0
         self._camera_lock = threading.Lock()
+        self._janitor = RecordingJanitor((cfg.get("cameras") or {}).get("record") or {})
+        self._janitor.start()
 
     def _mtime(self) -> float:
         try:
@@ -88,6 +91,7 @@ class DashboardState:
             self.public_cfg = public_config(self.cfg)
             self._cameras = CameraController(self.cfg)
             self._camera_cache = None
+            self._janitor.update((loaded.get("cameras") or {}).get("record") or {})
             self._cfg_mtime = mtime
             names = list(loaded["lights"])
             lights = self._command.get("lights") or {}
@@ -208,6 +212,9 @@ class DashboardState:
             self._cond.notify_all()
             return True
         return False
+
+    def stop(self) -> None:
+        self._janitor.stop()
 
     def snapshot(self) -> dict[str, Any]:
         self.refresh_config()

@@ -82,6 +82,24 @@ function streamPageUrl(webrtcBase, path) {
   }
 }
 
+function formatBytes(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x) || x < 0) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = x;
+  let i = 0;
+  while (v >= 1000 && i < units.length - 1) {
+    v /= 1000;
+    i += 1;
+  }
+  const digits = v >= 10 || i === 0 ? 0 : 1;
+  return `${v.toFixed(digits)}${units[i]}`;
+}
+
+function recActive(bundle, id) {
+  return Boolean((bundle?.state || []).find((c) => c.id === id)?.recording?.active);
+}
+
 export function CameraPanel({ config }) {
   const meta = config?.cameras || {};
   const items = Array.isArray(meta.items) && meta.items.length
@@ -202,6 +220,7 @@ export function CameraPanel({ config }) {
           const tone = nick.includes("canopy") ? "canopy"
             : nick.includes("ceil") ? "ceiling"
               : item.id === "cam1" ? "canopy" : "ceiling";
+          const rec = recActive(bundle, item.id);
           return (
             <button
               key={item.id}
@@ -212,6 +231,7 @@ export function CameraPanel({ config }) {
               onClick={() => selectCam(item.id)}
             >
               {item.nickname || item.id}
+              {rec ? <span className="cam-rec-dot" title="Recording" aria-label="Recording" /> : null}
             </button>
           );
         })}
@@ -222,6 +242,22 @@ export function CameraPanel({ config }) {
           <span className={`lamp ${state.ready ? "live" : "stale"}`}>
             <i /> {state.ready ? "ready" : "idle"}
           </span>
+          {state.recording?.active ? (
+            <span
+              className={`lamp rec on${bundle?.storage && !bundle.storage.ok ? " alarm" : ""}`}
+              title="Recording to disk"
+            >
+              <i /> REC
+            </span>
+          ) : null}
+          {bundle?.storage ? (
+            <span
+              className={`cam-free${bundle.storage.ok ? "" : " low"}`}
+              title={`Keep at least ${formatBytes(bundle.storage.min_free_bytes)} free`}
+            >
+              {formatBytes(bundle.storage.free_bytes)} free
+            </span>
+          ) : null}
           <span className="cam-note">{backend}</span>
           <a
             className="btn cam-stream"

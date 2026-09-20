@@ -1,6 +1,8 @@
 import { colorFor, fmt, level, ratio } from "./format.js";
 
 const TICK_PS = [0, 0.25, 0.5, 0.75, 1];
+const DIAL_VB_W = 160;
+const DIAL_VB_H = 148;
 
 function tickValue(spec, p) {
   const min = spec?.min ?? 0;
@@ -29,7 +31,7 @@ export function Dial({ label, unit, value, spec, digits = 1 }) {
     const ang = a0 + p * (a1 - a0);
     const outer = polar(cx, cy, r + 2, ang);
     const inner = polar(cx, cy, r - 9, ang);
-    const labelPos = polar(cx, cy, r + 15, ang);
+    const labelPos = polar(cx, cy, r + 18, ang);
     return {
       outer,
       inner,
@@ -40,13 +42,14 @@ export function Dial({ label, unit, value, spec, digits = 1 }) {
   });
   return (
     <div className="meter">
-      <svg viewBox="0 0 160 140" aria-label={label}>
-        <path d={arc} fill="none" stroke="#0a0e13" strokeWidth="12" strokeLinecap="round" />
-        <path d={arc} fill="none" stroke={col} strokeWidth="12" strokeLinecap="round"
-          strokeDasharray={`${t * arcLen(r, a0, a1)} ${arcLen(r, a0, a1)}`} />
-        {ticks.map((tick, i) => (
-          <g key={i}>
+      <div className="meter-dial">
+        <svg viewBox={`0 0 ${DIAL_VB_W} ${DIAL_VB_H}`} aria-label={label}>
+          <path d={arc} fill="none" stroke="#0a0e13" strokeWidth="12" strokeLinecap="round" />
+          <path d={arc} fill="none" stroke={col} strokeWidth="12" strokeLinecap="round"
+            strokeDasharray={`${t * arcLen(r, a0, a1)} ${arcLen(r, a0, a1)}`} />
+          {ticks.map((tick, i) => (
             <line
+              key={i}
               x1={tick.inner.x}
               y1={tick.inner.y}
               x2={tick.outer.x}
@@ -54,24 +57,25 @@ export function Dial({ label, unit, value, spec, digits = 1 }) {
               stroke="#5a6a7a"
               strokeWidth={tick.major ? 1.6 : 1}
             />
-            {tick.major && (
-              <text
-                x={tick.labelPos.x}
-                y={tick.labelPos.y}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                className="tick-label"
-                fill="#8b9bb0"
-                fontSize="11"
-              >
-                {tick.text}
-              </text>
-            )}
-          </g>
-        ))}
-        <line x1={cx} y1={cy} x2={needle.x} y2={needle.y} stroke="#f4f7fb" strokeWidth="2.5" />
-        <circle cx={cx} cy={cy} r="4" fill="#f4f7fb" />
-      </svg>
+          ))}
+          <line x1={cx} y1={cy} x2={needle.x} y2={needle.y} stroke="#f4f7fb" strokeWidth="2.5" />
+          <circle cx={cx} cy={cy} r="4" fill="#f4f7fb" />
+        </svg>
+        <div className="dial-tick-labels" aria-hidden="true">
+          {ticks.filter((tick) => tick.major).map((tick, i) => (
+            <span
+              key={i}
+              className="scale-tick"
+              style={{
+                left: `${(tick.labelPos.x / DIAL_VB_W) * 100}%`,
+                top: `${(tick.labelPos.y / DIAL_VB_H) * 100}%`,
+              }}
+            >
+              {tick.text}
+            </span>
+          ))}
+        </div>
+      </div>
       <div className="val" style={{ color: col }}>
         {fmt(value, digits)}<span className="unit">{unit}</span>
       </div>
@@ -80,14 +84,13 @@ export function Dial({ label, unit, value, spec, digits = 1 }) {
   );
 }
 
-export function Bar({ label, unit, value, spec, digits = 1 }) {
+export function Bar({ label, unit, value, spec, digits = 1, tickDigits: tickDig = 0 }) {
   const lvl = level(value, spec);
   const col = value === null || value === undefined ? "#8b9bb0" : colorFor(lvl);
   const w = `${ratio(value, spec) * 100}%`;
-  const d = tickDigits(spec, digits);
   const labels = TICK_PS.map((p) => ({
     p,
-    text: fmt(tickValue(spec, p), d),
+    text: fmt(tickValue(spec, p), tickDig),
     major: p === 0 || p === 0.5 || p === 1,
   }));
   return (
@@ -104,7 +107,7 @@ export function Bar({ label, unit, value, spec, digits = 1 }) {
           {labels.map((tick, i) => (
             <span
               key={i}
-              className={tick.major ? "major" : ""}
+              className={`scale-tick${tick.major ? " major" : ""}`}
               style={{ left: `${tick.p * 100}%` }}
             >
               {tick.major ? tick.text : ""}
@@ -131,7 +134,13 @@ export function Thermo({ nickname, value, spec }) {
       <div className="thermo-body">
         <div className="thermo-tick-labels" aria-hidden="true">
           {labels.map((tick) => (
-            <span key={tick.p} style={{ bottom: `${tick.p * 100}%` }}>{tick.text}</span>
+            <span
+              key={tick.p}
+              className="scale-tick"
+              style={{ bottom: `${tick.p * 100}%` }}
+            >
+              {tick.text}
+            </span>
           ))}
         </div>
         <div className="well" aria-label={nickname}>

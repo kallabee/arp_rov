@@ -7,6 +7,7 @@ import yaml
 
 from monitor_value_web.camera import public_camera_meta
 from monitor_value_web.command import DEFAULT_LIGHTS
+from monitor_value_web.record import normalize_record_config, recording_public_meta
 
 DEFAULT_CAMERAS = [
     {"id": "cam0", "path": "cam0", "nickname": "Ceiling"},
@@ -51,6 +52,7 @@ def _cameras(raw: Any) -> dict[str, Any]:
             "state_path": str(momo_raw.get("state_path") or "/tmp/rov_camera_state.json"),
         },
         "items": items,
+        "record": normalize_record_config(src.get("record")),
     }
 
 
@@ -105,12 +107,15 @@ def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "command": {
             "step_percent": cfg["command"]["step_percent"],
         },
-        "cameras": public_camera_meta(
-            cfg.get("cameras", {}).get("items") or [],
-            str((cfg.get("cameras") or {}).get("backend") or "mediamtx"),
-            webrtc=str(
-                ((cfg.get("cameras") or {}).get("mediamtx") or {}).get("webrtc")
-                or "http://127.0.0.1:8889"
+        "cameras": {
+            **public_camera_meta(
+                cfg.get("cameras", {}).get("items") or [],
+                str((cfg.get("cameras") or {}).get("backend") or "mediamtx"),
+                webrtc=str(
+                    ((cfg.get("cameras") or {}).get("mediamtx") or {}).get("webrtc")
+                    or "http://127.0.0.1:8889"
+                ),
             ),
-        ),
+            "record": recording_public_meta((cfg.get("cameras") or {}).get("record") or {}),
+        },
     }

@@ -213,7 +213,7 @@ export default function App() {
             <h2>Hull interior</h2>
             <div className="bars">
               <Bar label="Humidity" unit="%" value={monitor?.bme_humidity_percent} spec={gauges.bme_humidity_percent} />
-              <Bar label="Pressure" unit="atm" value={monitor?.bme_pressure_atm} spec={gauges.bme_pressure_atm} digits={3} />
+              <Bar label="Pressure" unit="atm" value={monitor?.bme_pressure_atm} spec={gauges.bme_pressure_atm} digits={3} tickDigits={1} />
             </div>
           </div>
         </div>

@@ -272,6 +272,10 @@ class MonitorValueWeb(Node):
 
     def destroy_node(self):
         try:
+            self._state.stop()
+        except Exception:
+            pass
+        try:
             self._http.shutdown()
         except Exception:
             pass

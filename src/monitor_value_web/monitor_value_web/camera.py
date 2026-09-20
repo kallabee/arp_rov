@@ -20,6 +20,14 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 from urllib.parse import urlparse
 
+from monitor_value_web.record import (
+    mediamtx_record_patch,
+    normalize_record_config,
+    record_patch_needed,
+    recording_status,
+    storage_snapshot,
+)
+
 
 ZOOM_PRESETS: dict[str, dict[str, Any]] = {
     "binned": {
@@ -738,7 +746,9 @@ class MediaMtxBackend:
         runtime = self.client.get_path_runtime(path)
         state = from_mediamtx_conf(conf)
         self._remember_seeds(path, state)
-        return self._attach_seeds(path, state), bool(runtime.get("ready"))
+        state = self._attach_seeds(path, state)
+        state["recording"] = recording_status(conf, runtime)
+        return state, bool(runtime.get("ready"))
 
     def _kick_ondemand(self, path: str) -> None:
         """Start an on-demand rpicamera after the path was recreated."""
@@ -766,6 +776,7 @@ class MediaMtxBackend:
         state = from_mediamtx_conf(conf)
         self._remember_seeds(path, state)
         state = self._attach_seeds(path, state)
+        state["recording"] = recording_status(conf, runtime)
         return {
             "restart": restart,
             "patch": patch,
@@ -773,6 +784,17 @@ class MediaMtxBackend:
             "warning": None,
             **state,
         }
+
+    def ensure_recording(
+        self, items: Iterable[Mapping[str, Any]], record_cfg: Mapping[str, Any]
+    ) -> None:
+        desired = mediamtx_record_patch(record_cfg)
+        for item in items:
+            path = str(item.get("path") or item["id"])
+            conf = self.client.get_path_conf(path)
+            if not record_patch_needed(conf, desired):
+                continue
+            self.client.patch_path_conf(path, desired)
 
 
 class MomoBackend:
@@ -809,6 +831,7 @@ class MomoBackend:
         state = merge_state(default_state(), rec.get("state") or {})
         pid = rec.get("pid")
         ready = isinstance(pid, int) and _pid_alive(pid)
+        state["recording"] = {"enabled": False, "active": False}
         return state, ready
 
     def apply(
@@ -878,14 +901,27 @@ class CameraController:
         self._by_id = {str(item["id"]): item for item in self.items if "id" in item}
         mtx = cameras.get("mediamtx") if isinstance(cameras.get("mediamtx"), dict) else {}
         self.webrtc = str(mtx.get("webrtc") or "http://127.0.0.1:8889")
+        self.record_cfg = normalize_record_config(cameras.get("record") or {})
+        self._ensure_error: Optional[str] = None
+        self._ensure_recording()
 
     def meta(self) -> dict[str, Any]:
         return public_camera_meta(self.items, self.backend.name, webrtc=self.webrtc)
 
+    def _ensure_recording(self) -> None:
+        ensure = getattr(self.backend, "ensure_recording", None)
+        if ensure is None:
+            return
+        try:
+            ensure(self.items, self.record_cfg)
+            self._ensure_error = None
+        except CameraError as exc:
+            self._ensure_error = str(exc)
+
     def snapshot(self) -> dict[str, Any]:
         out = dict(self.meta())
         states = []
-        error = None
+        error = self._ensure_error
         for item in self.items:
             cam_id = str(item["id"])
             try:
@@ -908,11 +944,20 @@ class CameraController:
                         "nickname": item.get("nickname") or cam_id,
                         "ready": False,
                         "error": str(exc),
+                        "recording": {"enabled": False, "active": False},
                     }
                 )
         out["state"] = states
         out["error"] = error
         out["backend"] = self.backend.name
+        out["storage"] = storage_snapshot(self.record_cfg)
+        out["record"] = {
+            "enabled": self.record_cfg["enabled"],
+            "dir": self.record_cfg["dir"],
+            "segment": self.record_cfg["segment"],
+            "part": self.record_cfg["part"],
+            "min_free_bytes": self.record_cfg["min_free_bytes"],
+        }
         return out
 
     def apply(self, cam_id: str, request: Mapping[str, Any]) -> dict[str, Any]:
