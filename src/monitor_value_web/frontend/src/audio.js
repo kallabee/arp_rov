@@ -1,14 +1,18 @@
+/** Alert tones: leak siren is critical; pulse/beep are advisories. */
 export class AlertAudio {
   constructor() {
     this.ctx = null;
     this.armed = true;
-    this.muted = false;
+    /** When true, suppress stream/publisher advisories only — never the leak siren. */
+    this.quietAdvisories = false;
     this._mode = "off";
     this._osc = null;
     this._gain = null;
     this._lfo = null;
     this._timer = null;
     this._lastPubBeep = 0;
+    this._status = { leak: false, publisher: "never", stream: "connecting" };
+    this._raf = null;
   }
 
   async arm() {
@@ -18,46 +22,89 @@ export class AlertAudio {
     }
     if (this.ctx.state === "suspended") await this.ctx.resume();
     this.armed = true;
+    this._ensureLoop();
   }
 
+  setQuietAdvisories(quiet) {
+    this.quietAdvisories = quiet;
+    localStorage.setItem("rov.alert.quietAdvisories", quiet ? "1" : "0");
+    // migrate old key
+    localStorage.removeItem("rov.alert.muted");
+    this._apply();
+  }
+
+  /** @deprecated use setQuietAdvisories — kept for callers that still say mute */
   setMuted(muted) {
-    this.muted = muted;
-    localStorage.setItem("rov.alert.muted", muted ? "1" : "0");
-    if (muted) this._stop();
+    this.setQuietAdvisories(muted);
+  }
+
+  get muted() {
+    return this.quietAdvisories;
+  }
+
+  set muted(v) {
+    this.quietAdvisories = Boolean(v);
   }
 
   static loadPrefs() {
-    return {
-      muted: localStorage.getItem("rov.alert.muted") === "1",
-    };
+    const legacy = localStorage.getItem("rov.alert.muted") === "1";
+    const quiet = localStorage.getItem("rov.alert.quietAdvisories") === "1" || legacy;
+    return { muted: quiet, quietAdvisories: quiet };
   }
 
-  update({ leak, publisher, stream }) {
-    if (!this.armed || this.muted) {
+  update(status) {
+    this._status = { ...this._status, ...status };
+    this._ensureLoop();
+    this._apply();
+  }
+
+  _ensureLoop() {
+    if (this._raf != null) return;
+    const tick = () => {
+      this._raf = window.setTimeout(tick, 500);
+      this._apply();
+    };
+    this._raf = window.setTimeout(tick, 500);
+  }
+
+  _apply() {
+    if (!this.armed || !this.ctx) {
       this._stop();
       return;
     }
-    if (!this.ctx) return;
     if (this.ctx.state === "suspended") {
       this.ctx.resume().catch(() => {});
     }
+    const { leak, publisher, stream } = this._status;
+
+    // Critical: always audible, ignores advisory quiet.
     if (leak) {
       this._siren();
       return;
     }
+
+    if (this.quietAdvisories) {
+      this._stop();
+      return;
+    }
+
+    // Stream lost — soft pulse every 5s ("ぷっ").
     if (stream === "disconnected") {
       this._pulse(180, 5.0);
       return;
     }
+
+    // Publisher stale — soft beep every 20s (not the ≤10s sound).
     if (publisher === "stale" || publisher === "never") {
-      const now = this.ctx.currentTime;
-      if (now - this._lastPubBeep > 15) {
+      const now = performance.now() / 1000;
+      if (now - this._lastPubBeep > 20) {
         this._lastPubBeep = now;
-        this._beep(420, 0.25);
+        this._beep(420, 0.2);
       }
       if (this._mode === "siren" || this._mode === "pulse") this._stop();
       return;
     }
+
     this._stop();
   }
 

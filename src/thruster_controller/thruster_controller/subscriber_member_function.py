@@ -24,6 +24,7 @@ from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from camera_actuator_interfaces.msg import CameraActuator
 from hand_actuator_interfaces.msg import HandActuator
+from light_actuator_interfaces.msg import LightActuator
 
 from adafruit_servokit import ServoKit
 
@@ -32,6 +33,7 @@ from device_registry import DeviceRegistry
 from thruster_controller import thruster_rot_conv
 from thruster_controller.cam_act_config import CamActPTConfig
 from thruster_controller.cam_act_controllers import CamActControllerBase, CamActControllerPT
+from thruster_controller.light_pwm import open_light_pwm_driver
 
 # from adafruit_servokit import ServoKit
 
@@ -156,6 +158,12 @@ class ActuatorSubscriber(Node):
             self.listener_callback_cam_act,
             history_depth,
         )
+        self.subscription = self.create_subscription(
+            LightActuator,
+            f"{node_name}/lights",
+            self.listener_callback_lights,
+            history_depth,
+        )
         self.subscription  # prevent unused variable warning
 
         timer_period = 0.01  # [s]
@@ -207,6 +215,13 @@ class ActuatorSubscriber(Node):
         self.cac: CamActControllerBase = CamActControllerPT(
             pt_cfg, linux_bus=d.linux_bus, i2c_addr=d.addr
         )
+
+        self.light_pwm = None
+        try:
+            self.light_pwm = open_light_pwm_driver()
+            self.light_pwm.all_off()
+        except Exception as exc:
+            self.get_logger().warn(f"Light PWM disabled: {exc}")
 
     def reset_servo(self) -> None:
         if self.enable_thrusters:
@@ -269,6 +284,18 @@ class ActuatorSubscriber(Node):
 
     def listener_callback_cam_act(self, msg: CameraActuator):
         self.apply_cam_acts(msg)
+
+    def listener_callback_lights(self, msg: LightActuator):
+        if self.light_pwm is None:
+            return
+        n = min(len(msg.names), len(msg.duties))
+        self.get_logger().info(
+            "Lights: " + ", ".join(f"{msg.names[i]}={msg.duties[i]:.2f}" for i in range(n))
+        )
+        try:
+            self.light_pwm.apply(list(msg.names), list(msg.duties))
+        except Exception as exc:
+            self.get_logger().warn(f"Light PWM apply failed: {exc}")
 
     def timer_callback(self):
         cmd = self.nidh_cmd_vel.calc_cmd()

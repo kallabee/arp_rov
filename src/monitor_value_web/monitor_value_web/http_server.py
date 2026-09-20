@@ -7,10 +7,23 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import unquote, urlparse
 
+from monitor_value_web.camera import CameraController, CameraError
+from monitor_value_web.command import (
+    EchoFilter,
+    default_command,
+    merge_lights,
+    parse_hand,
+    parse_lights,
+    parse_twist,
+    zero_hand,
+    zero_twist,
+)
 from monitor_value_web.config import load_web_config, public_config
+
+PublishFn = Callable[[dict[str, dict[str, float]]], None]
 
 
 def _status_from_age(age: Optional[float], stale_sec: float) -> str:
@@ -36,12 +49,23 @@ class DashboardState:
         self._cond = threading.Condition(self._lock)
         self._tick = 0
         self.started_mono = time.monotonic()
+        self._command = default_command(cfg.get("lights") or [])
+        self._echo = EchoFilter(float(cfg.get("command", {}).get("echo_window_sec", 1.5)))
+        self._active_until = {"twist": 0.0, "hand": 0.0, "lights": 0.0}
+        self.publish_command: Optional[PublishFn] = None
+        self._cameras = CameraController(cfg)
+        self._camera_cache: Optional[dict[str, Any]] = None
+        self._camera_cache_mono = 0.0
+        self._camera_lock = threading.Lock()
 
     def _mtime(self) -> float:
         try:
             return float(self.cfg_path.stat().st_mtime)
         except OSError:
             return -1.0
+
+    def _light_names(self) -> list[str]:
+        return list(self.cfg.get("lights") or [])
 
     def refresh_config(self) -> None:
         mtime = self._mtime()
@@ -57,8 +81,17 @@ class DashboardState:
             self.cfg["temperature_gauge"] = loaded["temperature_gauge"]
             self.cfg["leaks"] = loaded["leaks"]
             self.cfg["gauges"] = loaded["gauges"]
+            self.cfg["topics"] = loaded["topics"]
+            self.cfg["lights"] = loaded["lights"]
+            self.cfg["command"] = loaded["command"]
+            self.cfg["cameras"] = loaded["cameras"]
             self.public_cfg = public_config(self.cfg)
+            self._cameras = CameraController(self.cfg)
+            self._camera_cache = None
             self._cfg_mtime = mtime
+            names = list(loaded["lights"])
+            lights = self._command.get("lights") or {}
+            self._command["lights"] = {n: float(lights.get(n, 0.0)) for n in names}
 
     def set_monitor(self, payload: dict[str, Any]) -> None:
         with self._cond:
@@ -93,6 +126,89 @@ class DashboardState:
             self._tick += 1
             self._cond.notify_all()
 
+    def cameras_snapshot(self, *, force: bool = False) -> dict[str, Any]:
+        now = time.monotonic()
+        with self._camera_lock:
+            if (
+                not force
+                and self._camera_cache is not None
+                and now - self._camera_cache_mono < 1.5
+            ):
+                return dict(self._camera_cache)
+            try:
+                snap = self._cameras.snapshot()
+            except CameraError as exc:
+                snap = {**self._cameras.meta(), "state": [], "error": str(exc)}
+            self._camera_cache = snap
+            self._camera_cache_mono = now
+            return dict(snap)
+
+    def apply_camera_command(self, cam_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._camera_lock:
+            result = self._cameras.apply(cam_id, payload)
+            self._camera_cache = None
+        with self._cond:
+            self._tick += 1
+            self._cond.notify_all()
+        return result
+
+    def apply_http_command(self, payload: dict[str, Any]) -> dict[str, Any]:
+        names = self._light_names()
+        groups: dict[str, dict[str, float]] = {}
+        now = time.monotonic()
+        hold = 0.4
+        with self._cond:
+            if payload.get("estop"):
+                groups["twist"] = zero_twist()
+                groups["hand"] = zero_hand()
+            else:
+                if "twist" in payload:
+                    groups["twist"] = parse_twist(payload.get("twist"))
+                if "hand" in payload:
+                    groups["hand"] = parse_hand(payload.get("hand"))
+            if "lights" in payload:
+                groups["lights"] = parse_lights(payload.get("lights"), names)
+            if not groups:
+                return dict(self._command)
+            for group, data in groups.items():
+                self._command[group] = data
+                self._active_until[group] = now + hold
+                self._echo.note(group, data)
+            self._command["origin"] = "http"
+            self._command["seq"] = int(self._command.get("seq") or 0) + 1
+            snapshot = {
+                "twist": dict(self._command["twist"]),
+                "hand": dict(self._command["hand"]),
+                "lights": dict(self._command["lights"]),
+                "origin": "http",
+                "seq": self._command["seq"],
+            }
+            self._tick += 1
+            self._cond.notify_all()
+        if self.publish_command is not None:
+            self.publish_command(groups)
+        return snapshot
+
+    def apply_remote_command(self, group: str, data: dict[str, float]) -> bool:
+        now = time.monotonic()
+        with self._cond:
+            if now < self._active_until.get(group, 0.0):
+                return False
+            if self._echo.is_echo(group, data):
+                return False
+            if group == "lights":
+                self._command["lights"] = merge_lights(
+                    self._command.get("lights") or {}, data, self._light_names()
+                )
+            else:
+                self._command[group] = dict(data)
+            self._command["origin"] = "ros"
+            self._command["seq"] = int(self._command.get("seq") or 0) + 1
+            self._tick += 1
+            self._cond.notify_all()
+            return True
+        return False
+
     def snapshot(self) -> dict[str, Any]:
         self.refresh_config()
         now = time.monotonic()
@@ -108,7 +224,15 @@ class DashboardState:
             return {
                 "monitor": self._monitor,
                 "attitude": self._attitude,
+                "command": {
+                    "twist": dict(self._command["twist"]),
+                    "hand": dict(self._command["hand"]),
+                    "lights": dict(self._command["lights"]),
+                    "origin": self._command.get("origin") or "none",
+                    "seq": int(self._command.get("seq") or 0),
+                },
                 "config": self.public_cfg,
+                "cameras": dict(self._camera_cache) if self._camera_cache else self._cameras.meta(),
                 "health": {
                     "ok": publisher == "live",
                     "publisher": publisher,
@@ -164,7 +288,55 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if path == "/api/stream":
             self._stream()
             return
+        if path == "/api/cameras":
+            try:
+                self._send_json(200, self.state.cameras_snapshot())
+            except CameraError as exc:
+                self._send_json(503, {"error": str(exc)})
+            return
         self._static(path)
+
+    def do_POST(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        path = parsed.path
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._send_json(400, {"error": "invalid content-length"})
+            return
+        if length < 0 or length > 100_000:
+            self._send_json(413, {"error": "payload too large"})
+            return
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            payload = json.loads(raw.decode("utf-8") or "{}")
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self._send_json(400, {"error": "invalid json"})
+            return
+        if not isinstance(payload, dict):
+            self._send_json(400, {"error": "json object required"})
+            return
+        if path == "/api/command":
+            try:
+                result = self.state.apply_http_command(payload)
+            except (TypeError, ValueError) as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            self._send_json(200, result)
+            return
+        if path.startswith("/api/cameras/"):
+            cam_id = unquote(path[len("/api/cameras/") :]).strip("/")
+            if not cam_id or "/" in cam_id:
+                self._send_json(404, {"error": "unknown camera"})
+                return
+            try:
+                result = self.state.apply_camera_command(cam_id, payload)
+            except CameraError as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            self._send_json(200, result)
+            return
+        self.send_error(404)
 
     def _stream(self) -> None:
         self.send_response(200)
@@ -200,6 +372,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if target.is_dir():
             target = target / "index.html"
         if not target.is_file():
+            suffix = Path(rel).suffix.lower()
+            if suffix and suffix != ".html":
+                self.send_error(404)
+                return
             index = root / "index.html"
             if index.is_file() and not rel.startswith("api/"):
                 target = index

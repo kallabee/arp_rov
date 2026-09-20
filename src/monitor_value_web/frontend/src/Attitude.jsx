@@ -31,6 +31,9 @@ export function AttitudePanel({ attitude }) {
     rosToThree.add(vehicle);
     scene.add(new THREE.GridHelper(1.6, 8, 0x2a3542, 0x1a222c));
 
+    const gizmo = makeAxisGizmo();
+    const gizmoCam = new THREE.OrthographicCamera(-1.15, 1.15, 1.15, -1.15, 0.1, 10);
+
     const persp = new THREE.PerspectiveCamera(42, 1, 0.05, 20);
     const start = new THREE.Vector3(0.85, 0.55, 0.85);
     const sph = new THREE.Spherical().setFromVector3(start);
@@ -57,6 +60,8 @@ export function AttitudePanel({ attitude }) {
       scene,
       vehicle,
       cameras: { persp, top, side, front },
+      gizmo,
+      gizmoCam,
       wrap,
       orbit,
       drag,
@@ -135,13 +140,13 @@ export function AttitudePanel({ attitude }) {
 
   return (
     <div className="card card-fill">
-      <h2>姿勢 · IMU {attitude?.source === "snapshot" ? "(10 Hz)" : attitude?.source === "monitor" ? "(1 Hz)" : ""}</h2>
+      <h2>Attitude · IMU {attitude?.source === "snapshot" ? "(10 Hz)" : attitude?.source === "monitor" ? "(1 Hz)" : ""}</h2>
       <div ref={wrapRef} className="attitude-grid">
         <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
         <ViewLabel title="3D · drag" rpy={rpy} />
-        <ViewLabel title="上面 (ヨー)" rpy={rpy} />
-        <ViewLabel title="側面 (ピッチ)" rpy={rpy} />
-        <ViewLabel title="正面 (ロール)" rpy={rpy} />
+        <ViewLabel title="Top (yaw)" rpy={rpy} />
+        <ViewLabel title="Side (pitch)" rpy={rpy} />
+        <ViewLabel title="Front (roll)" rpy={rpy} />
       </div>
     </div>
   );
@@ -176,6 +181,87 @@ function clamp(v, lo, hi) {
 function deg(v) {
   if (v === null || v === undefined || Number.isNaN(v)) return 0;
   return (v * Math.PI) / 180;
+}
+
+function makeAxisGizmo() {
+  const scene = new THREE.Scene();
+  // Match main scene: ROS Z-up → Three Y-up.
+  const root = new THREE.Group();
+  root.rotation.x = -Math.PI / 2;
+  scene.add(root);
+
+  const len = 0.85;
+  const axes = [
+    { dir: [1, 0, 0], color: 0xff4d4f, label: "X" },
+    { dir: [0, 1, 0], color: 0x3dd68c, label: "Y" },
+    { dir: [0, 0, 1], color: 0x4cc3ff, label: "Z" },
+  ];
+  for (const ax of axes) {
+    const geom = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(ax.dir[0] * len, ax.dir[1] * len, ax.dir[2] * len),
+    ]);
+    const line = new THREE.Line(
+      geom,
+      new THREE.LineBasicMaterial({ color: ax.color, depthTest: false, transparent: true })
+    );
+    line.renderOrder = 10;
+    root.add(line);
+
+    const tip = new THREE.Mesh(
+      new THREE.ConeGeometry(0.07, 0.18, 8),
+      new THREE.MeshBasicMaterial({ color: ax.color, depthTest: false })
+    );
+    tip.position.set(ax.dir[0] * len, ax.dir[1] * len, ax.dir[2] * len);
+    if (ax.dir[0]) tip.rotation.z = -Math.PI / 2;
+    else if (ax.dir[1]) { /* default cone +Y */ }
+    else tip.rotation.x = Math.PI / 2;
+    tip.renderOrder = 11;
+    root.add(tip);
+
+    const spr = axisSprite(ax.label, ax.color);
+    spr.position.set(ax.dir[0] * (len + 0.22), ax.dir[1] * (len + 0.22), ax.dir[2] * (len + 0.22));
+    spr.renderOrder = 12;
+    root.add(spr);
+  }
+  return scene;
+}
+
+function axisSprite(text, color) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, 64, 64);
+  ctx.font = "bold 44px IBM Plex Sans, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = "#070b10";
+  ctx.strokeText(text, 32, 34);
+  ctx.fillStyle = `#${color.toString(16).padStart(6, "0")}`;
+  ctx.fillText(text, 32, 34);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    depthTest: false,
+    depthWrite: false,
+    transparent: true,
+  });
+  const spr = new THREE.Sprite(mat);
+  spr.scale.set(0.4, 0.4, 0.4);
+  return spr;
+}
+
+function syncGizmoCamera(gizmoCam, viewCam) {
+  const dir = viewCam.position.clone();
+  if (dir.lengthSq() < 1e-8) dir.set(0, 0, 1);
+  else dir.normalize();
+  gizmoCam.position.copy(dir.multiplyScalar(2.4));
+  gizmoCam.up.copy(viewCam.up);
+  gizmoCam.lookAt(0, 0, 0);
+  gizmoCam.updateProjectionMatrix();
 }
 
 function makeRov() {
@@ -218,7 +304,7 @@ function resize(s) {
 
 function renderViews(s) {
   if (!s) return;
-  const { renderer, scene, cameras, wrap } = s;
+  const { renderer, scene, cameras, gizmo, gizmoCam, wrap } = s;
   const w = wrap.clientWidth;
   const h = wrap.clientHeight;
   if (w < 2 || h < 2) return;
@@ -234,5 +320,16 @@ function renderViews(s) {
     renderer.setViewport(v.x, v.y, v.ww, v.hh);
     renderer.setScissor(v.x, v.y, v.ww, v.hh);
     renderer.render(scene, v.cam);
+
+    // Orientation gizmo — bottom-left of each pane (WebGL y = bottom).
+    const gz = Math.max(36, Math.min(v.ww, v.hh) * 0.32);
+    const margin = Math.max(4, gz * 0.06);
+    const gx = v.x + margin;
+    const gy = v.y + margin;
+    syncGizmoCamera(gizmoCam, v.cam);
+    renderer.clearDepth();
+    renderer.setViewport(gx, gy, gz, gz);
+    renderer.setScissor(gx, gy, gz, gz);
+    renderer.render(gizmo, gizmoCam);
   }
 }

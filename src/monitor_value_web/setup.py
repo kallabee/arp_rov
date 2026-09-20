@@ -31,6 +31,7 @@ setup(
     name=package_name,
     version="0.0.0",
     packages=find_packages(exclude=["test", "frontend"]),
+    package_data={package_name: ["light_pwm.yaml"]},
     data_files=_share_files(),
     install_requires=["setuptools"],
     zip_safe=True,
@@ -42,6 +43,7 @@ setup(
         "console_scripts": [
             "monitor_value_web = monitor_value_web.node:main",
             "monitor_value_web_demo = monitor_value_web.demo:main",
+            "rpi_camera_ctrl = monitor_value_web.camera_cli:main",
         ],
     },
 )

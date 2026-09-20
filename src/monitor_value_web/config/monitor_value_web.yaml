@@ -5,6 +5,51 @@ http:
 topics:
   monitor: rov/monitor_value
   imu_snapshot: rov/imu_nav/snapshot
+  cmd_vel: turtle1/cmd_vel
+  hand_act: turtle1/hand_act
+  lights: turtle1/lights
+
+# Light names/order match unit_scripts/light_pwm_loop_control.py
+lights:
+  - CeilA
+  - CeilB
+  - VisFwdBtm
+  - VisFwdTel
+  - Uv
+  - Test
+  - Ir
+  - VisFwdTop
+  - VisDwn
+
+command:
+  step_percent: 5
+  echo_window_sec: 1.5
+
+# Camera control is streamer-agnostic (zoom / AF / AE / WB).
+# backend: mediamtx | momo
+# MediaMTX: WB and AE EV/ME sliders are live. Zoom, AF, and AE on/off restart the path.
+# momo: all changes need process restart (--libcamera-control is startup-only).
+cameras:
+  backend: mediamtx
+  mediamtx:
+    api: http://127.0.0.1:9997
+    hls: http://127.0.0.1:8888
+    # WebRTC player page; host is replaced with the dashboard hostname in the UI.
+    webrtc: http://127.0.0.1:8889
+  momo:
+    binary: /home/arp/momo/momo-2025.1.0_raspberry-pi-os_armv8/momo
+    extra_args: ["--no-audio-device", "p2p"]
+    restart: false
+    state_path: /tmp/rov_camera_state.json
+  items:
+    - id: cam0
+      path: cam0
+      index: 0
+      nickname: Ceiling
+    - id: cam1
+      path: cam1
+      index: 1
+      nickname: Canopy
 
 stale_sec: 3.0
 imu_min_interval_sec: 0.1

@@ -1,0 +1,12 @@
+# Light PCA9685 channels. Names/order match unit_scripts/light_pwm_loop_control.py.
+frequency_hz: 1000
+channels:
+  CeilA: 2
+  CeilB: 3
+  VisFwdBtm: 4
+  VisFwdTel: 5
+  Uv: 6
+  Test: 8
+  Ir: 9
+  VisFwdTop: 10
+  VisDwn: 11

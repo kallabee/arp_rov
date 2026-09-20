@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertAudio } from "./audio.js";
 import { AttitudePanel } from "./Attitude.jsx";
+import { CameraPanel } from "./Camera.jsx";
+import { ControlDock } from "./Controls.jsx";
 import { fmt } from "./format.js";
 import { Bar, Dial, Thermo } from "./Meters.jsx";
 
@@ -12,15 +14,17 @@ export default function App() {
   const [stream, setStream] = useState("connecting");
   const [armed, setArmed] = useState(true);
   const [muted, setMuted] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const audioRef = useRef(null);
   const statusRef = useRef({ leak: false, publisher: "never", stream: "connecting" });
+  const appRef = useRef(null);
 
   useEffect(() => {
     const prefs = AlertAudio.loadPrefs();
-    setMuted(prefs.muted);
+    setMuted(prefs.quietAdvisories);
     const audio = new AlertAudio();
     audio.armed = true;
-    audio.muted = prefs.muted;
+    audio.quietAdvisories = prefs.quietAdvisories;
     audioRef.current = audio;
     audio.arm().then(() => setArmed(true)).catch(() => {});
     const unlock = () => {
@@ -43,16 +47,34 @@ export default function App() {
 
   useEffect(() => {
     const es = new EventSource("/api/stream");
-    es.addEventListener("state", (ev) => {
+    let disconnectTimer = null;
+    const markConnected = () => {
+      if (disconnectTimer) {
+        clearTimeout(disconnectTimer);
+        disconnectTimer = null;
+      }
       setStream("connected");
+    };
+    es.addEventListener("state", (ev) => {
+      markConnected();
       try {
         const data = JSON.parse(ev.data);
         setState(data);
         if (data.config) setCfg(data.config);
       } catch (_) { /* ignore malformed */ }
     });
-    es.onerror = () => setStream("disconnected");
-    return () => es.close();
+    // EventSource fires error on transient reconnects — wait before alarming.
+    es.onerror = () => {
+      if (disconnectTimer) return;
+      disconnectTimer = setTimeout(() => {
+        disconnectTimer = null;
+        setStream("disconnected");
+      }, 3500);
+    };
+    return () => {
+      if (disconnectTimer) clearTimeout(disconnectTimer);
+      es.close();
+    };
   }, []);
 
   const monitor = state.monitor;
@@ -65,6 +87,16 @@ export default function App() {
 
   statusRef.current = { leak, publisher: health.publisher, stream };
 
+  const alertTone = leak
+    ? { cls: "alarm", text: "Siren · water leak" }
+    : muted
+      ? { cls: "quiet", text: "Advisories off (siren on)" }
+      : stream === "disconnected"
+        ? { cls: "stale", text: "Pulse · stream lost (~5s)" }
+        : (health.publisher === "stale" || health.publisher === "never")
+          ? { cls: "stale", text: "Beep · publisher stale (~20s)" }
+          : { cls: "quiet", text: "Alerts quiet" };
+
   useEffect(() => {
     audioRef.current?.update({
       leak,
@@ -76,14 +108,32 @@ export default function App() {
   const toggleMute = () => {
     const next = !muted;
     setMuted(next);
-    audioRef.current?.setMuted(next);
+    // Quiets stream/publisher advisories only — leak siren stays on.
+    audioRef.current?.setQuietAdvisories(next);
+  };
+
+  useEffect(() => {
+    const onFs = () => setFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        const el = appRef.current || document.documentElement;
+        await el.requestFullscreen?.();
+      }
+    } catch (_) { /* ignore */ }
   };
 
   return (
-    <div className="app">
+    <div className="app" ref={appRef}>
       <header className="header">
-        <div className="brand">ROV Monitor</div>
-        <Lamp name="接続" status={stream === "connected" ? "live" : stream} />
+        <div className="brand">Kankai Control Panel</div>
+        <Lamp name="Link" status={stream === "connected" ? "live" : stream} />
         <Lamp name="Publisher" status={health.publisher || "never"} />
         <Lamp name="IMU" status={health.imu || "never"} />
         <div className="meta">
@@ -92,41 +142,53 @@ export default function App() {
           <span>elapsed {monitor?.elapsed_hms || "---"}</span>
         </div>
         <div className="header-actions">
-          <span className="lamp live">警報 ON</span>
-          <button className={muted ? "btn" : "btn armed"} onClick={toggleMute}>
-            {muted ? "ミュート中" : "音あり"}
+          <span
+            className={`lamp ${alertTone.cls}`}
+            title="Siren = water leak (never muted). Soft pulse ~5s = data stream lost. Soft beep ~20s = publisher stale."
+          >
+            <i /> {alertTone.text}
+          </span>
+          <button
+            className={muted ? "btn" : "btn armed"}
+            onClick={toggleMute}
+            title="Turn off advisory pulse/beep only. Leak siren always stays on."
+          >
+            {muted ? "Advisories off" : "Advisories on"}
+          </button>
+          <button className="btn" type="button" onClick={toggleFullscreen}>
+            {fullscreen ? "Exit full" : "Fullscreen"}
           </button>
         </div>
       </header>
       {stream === "disconnected" && (
-        <div className="banner">データストリーム切断 — publisher / ノードを確認</div>
+        <div className="banner">Data stream disconnected — check publisher / node</div>
       )}
       {stream === "connected" && (health.publisher === "stale" || health.publisher === "never") && (
-        <div className="banner">rov/monitor_value が途絶 — monitor_value_pub を確認</div>
+        <div className="banner">rov/monitor_value stalled — check monitor_value_pub</div>
       )}
 
       <div className="layout">
         <div className="col">
           <LeakCard monitor={monitor} leak={leak} leaks={leaks} />
           <div className="card">
-            <h2>深度 · MS5837</h2>
+            <h2>Depth</h2>
             <div className="gauge-row">
               <Dial
-                label="深度 (海水密度換算)"
+                label="Depth (seawater)"
                 unit="m"
                 value={monitor?.depth_m}
                 spec={gauges.depth_m}
                 digits={2}
               />
               <Dial
-                label="生値"
+                label="Raw"
                 unit="atm"
                 value={monitor?.depth_pressure_atm}
                 spec={gauges.depth_pressure_atm}
                 digits={3}
               />
               <Dial
-                label="温度"
+                label="Temp"
                 unit="°C"
                 value={monitor?.depth_temp_c}
                 spec={tempGauge}
@@ -135,7 +197,7 @@ export default function App() {
             </div>
           </div>
           <div className="card card-fill">
-            <h2>温度</h2>
+            <h2>Temperature</h2>
             <div className="thermo-row">
               {temps.filter((t) => t.key !== "depth_temp_c").map((t) => (
                 <Thermo
@@ -148,26 +210,26 @@ export default function App() {
             </div>
           </div>
           <div className="card">
-            <h2>内殻</h2>
+            <h2>Hull interior</h2>
             <div className="bars">
-              <Bar label="湿度" unit="%" value={monitor?.bme_humidity_percent} spec={gauges.bme_humidity_percent} />
-              <Bar label="気圧" unit="atm" value={monitor?.bme_pressure_atm} spec={gauges.bme_pressure_atm} digits={3} />
+              <Bar label="Humidity" unit="%" value={monitor?.bme_humidity_percent} spec={gauges.bme_humidity_percent} />
+              <Bar label="Pressure" unit="atm" value={monitor?.bme_pressure_atm} spec={gauges.bme_pressure_atm} digits={3} />
             </div>
           </div>
         </div>
         <div className="col col-right">
           <AttitudePanel attitude={state.attitude} />
           <div className="card card-compact">
-            <h2>電源</h2>
+            <h2>Power</h2>
             <div className="gauge-row gauge-row-4">
-              <Dial label="電圧" unit="V" value={monitor?.voltage_v} spec={gauges.voltage_v} digits={1} />
-              <Dial label="電流" unit="A" value={monitor?.current_a} spec={gauges.current_a} digits={2} />
-              <Dial label="電力" unit="W" value={monitor?.power_w} spec={gauges.power_w} digits={1} />
-              <Dial label="残量" unit="%" value={monitor?.remaining_percent} spec={gauges.remaining_percent} digits={0} />
+              <Dial label="Voltage" unit="V" value={monitor?.voltage_v} spec={gauges.voltage_v} digits={1} />
+              <Dial label="Current" unit="A" value={monitor?.current_a} spec={gauges.current_a} digits={2} />
+              <Dial label="Power" unit="W" value={monitor?.power_w} spec={gauges.power_w} digits={1} />
+              <Dial label="Remaining" unit="%" value={monitor?.remaining_percent} spec={gauges.remaining_percent} digits={0} />
             </div>
             <div className="kv" style={{ marginTop: 8 }}>
-              <span>積算</span><b>{fmt(monitor?.accumulated_energy_wh, 2)} Wh</b>
-              <span>ピーク</span><b>{fmt(monitor?.peak_power_w, 1)} W</b>
+              <span>Energy</span><b>{fmt(monitor?.accumulated_energy_wh, 2)} Wh</b>
+              <span>Peak</span><b>{fmt(monitor?.peak_power_w, 1)} W</b>
             </div>
           </div>
           <div className="card card-compact">
@@ -179,6 +241,13 @@ export default function App() {
             </div>
           </div>
         </div>
+        <ControlDock
+          command={state.command}
+          lights={cfg?.lights}
+          stepPercent={cfg?.command?.step_percent ?? 5}
+        >
+          <CameraPanel config={cfg} />
+        </ControlDock>
       </div>
     </div>
   );
@@ -198,9 +267,9 @@ function Lamp({ name, status }) {
 function labelOf(s) {
   if (s === "live") return "live";
   if (s === "stale") return "stale";
-  if (s === "never") return "なし";
-  if (s === "connecting") return "接続中";
-  if (s === "disconnected") return "切断";
+  if (s === "never") return "none";
+  if (s === "connecting") return "connecting";
+  if (s === "disconnected") return "disconnected";
   return s;
 }
 
@@ -208,7 +277,7 @@ function LeakCard({ monitor, leak, leaks }) {
   const byCh = Object.fromEntries((leaks || []).map((x) => [Number(x.channel), x.nickname]));
   return (
     <div className={leak ? "card alarm" : "card"}>
-      <h2>漏水</h2>
+      <h2>Water Leakage</h2>
       <div className="leak-grid">
         <Chan
           n={byCh[0] || "ch0"}
@@ -227,10 +296,10 @@ function LeakCard({ monitor, leak, leaks }) {
 
 function Chan({ n, v, hot }) {
   return (
-    <div className={hot ? "ch hot" : "ch"}>
+    <div className={hot ? "ch hot blink" : "ch"}>
       <div className="name">{n}</div>
       <div className="big">{fmt(v, 2)} V</div>
-      <div>{hot ? "DETECTED" : "ok"}</div>
+      <div className="status">{hot ? "DETECTED" : "ok"}</div>
     </div>
   );
 }
