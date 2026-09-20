@@ -44,18 +44,13 @@ ina226_current:
   bus: 2
   addr: 0x40
 
-# --- ADC (ADS1015; inner_hull water leak on board SCL/SDA → often i2c-1) ---
-ads1015:
-  bus: 3
-  addr: 0x48
-
 # Hull sensors: thermocouple + water leak (unit_scripts on /dev/i2c-2 @ 0x49)
 ads1015_hull:
   bus: 2
   addr: 0x49
 
-# --- Environmental (BME280; inner_hull uses bitbang I2C ch6 → i2c-6) ---
-# I2C addr 0x77 vs 0x76 is SDO pin; bmp280_test2 in unit_scripts used 0x76 on ch3
+# --- Environmental (BME280 on hardware i2c-2 / GPIO 4+5) ---
+# I2C addr 0x77 vs 0x76 is the SDO pin.
 bme280:
   bus: 2
   addr: 0x77

@@ -21,10 +21,8 @@ sensors:
 
   bme280:
     mode: enabled_if_can
-    i2c_bitbang:
-      enabled: true
-      scl_pin: D23
-      sda_pin: D22
+    # Hardware I2C via device_i2c.yaml (bus 2 @ 0x77 on GPIO 4/5).
+    # Bitbang GPIO 22/23 was a Pi 4 inner-hull leftover and is not used.
 
   current_monitor:
     mode: enabled_if_can

@@ -38,8 +38,8 @@ class LightController:
 LIGHT_CHANNELS: dict[str, int] = {
     # 0
     # 1
-    # 2
-    # 3
+    "CeilA": 2,
+    "CeilB": 3,
 
     "VisFwdBtm": 4,
     "VisFwdTel": 5,   

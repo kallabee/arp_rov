@@ -19,12 +19,8 @@ sensors:
 
   bme280:
     mode: enabled_if_can
-    # If you are using Blinka bitbang I2C like inner_hull_status_pub, set these.
-    # Otherwise leave null to use board.SCL/board.SDA.
-    i2c_bitbang:
-      enabled: false
-      scl_pin: D23
-      sda_pin: D22
+    # Default: ExtendedI2C from device_i2c.yaml (bus/addr). Enable bitbang only if
+    # the chip is wired to GPIO rather than a Linux I2C adapter.
 
   current_monitor:
     mode: enabled_if_can

@@ -1,7 +1,8 @@
 ﻿import ina226
 import time
 
-sensor = ina226.INA226(busnum=3, address=0x40, shunt_ohms=0.002, max_expected_amps=25)
+# sensor = ina226.INA226(busnum=2, address=0x40, shunt_ohms=0.002, max_expected_amps=25) #
+sensor = ina226.INA226(busnum=2, address=0x40, shunt_ohms=0.01, max_expected_amps=25) # Kankai
 sensor.configure()
 
 while True:

@@ -18,27 +18,21 @@ if not sensor.read():
     print("Sensor read failed!")
     exit(1)
 
-print(sensor.pressure(ms5837_renamed.UNITS_atm))
+print(f"Pressure: {sensor.pressure(ms5837_renamed.UNITS_atm):.3f} atm")
 
-print(f"Pressure: {sensor.pressure(ms5837_renamed.UNITS_atm):.2f} atm {sensor.pressure(ms5837_renamed.UNITS_Torr):.2f} Torr  {sensor.pressure(ms5837_renamed.UNITS_psi):.2f} psi")
-
-
-print(f"Temperature: {sensor.temperature(ms5837_renamed.UNITS_Centigrade):.2f} C  {sensor.temperature(ms5837_renamed.UNITS_Farenheit):.2f} F  {sensor.temperature(ms5837_renamed.UNITS_Kelvin):.2f} K")
+print(f"Temperature: {sensor.temperature(ms5837_renamed.UNITS_Centigrade):.2f} ℃")
 freshwaterDepth = sensor.depth() # default is freshwater
 sensor.setFluidDensity(ms5837_renamed.DENSITY_SALTWATER)
 saltwaterDepth = sensor.depth() # No nead to read() again
 sensor.setFluidDensity(1000) # kg/m^3
-print(f"Depth: {freshwaterDepth:.3f} m (freshwater)  {saltwaterDepth:.3f} m (saltwater)")
-
-# fluidDensity doesn't matter for altitude() (always MSL air density)
-print(f"MSL Relative Altitude: {sensor.altitude():.2f} m")  # relative to Mean Sea Level pressure in air
+# Depth / altitude are omitted to keep units atm, ℃ only.
 
 time.sleep(5)
 
 # Spew readings
 while True:
         if sensor.read():
-                print(f"P: {sensor.pressure():0.1f} mbar  {sensor.pressure(ms5837_renamed.UNITS_psi):0.3f} psi\tT: {sensor.temperature():0.2f} C  {sensor.temperature(ms5837_renamed.UNITS_Farenheit):0.2f} F")
+                print(f"P: {sensor.pressure(ms5837_renamed.UNITS_atm):0.3f} atm\tT: {sensor.temperature(ms5837_renamed.UNITS_Centigrade):0.2f} ℃")
         else:
                 print("Sensor read failed!")
                 exit(1)

@@ -60,7 +60,7 @@ if __name__ == "__main__":
                     print("Failed to measure.")
                     break
                 print(
-                    f"{sensor.depth:6.3f} [m] {sensor.pressure:3.1f} [atm] {sensor.temperature:4.1f} [deg. C]"
+                    f"{sensor.pressure:0.3f} [atm] {sensor.temperature:0.2f} [℃]"
                 )
                 time.sleep(1)
         else:
