@@ -1,0 +1,10 @@
+# request_json matches the HTTP POST /api/cameras/<id> body.
+string camera_id
+string request_json
+---
+bool ok
+string error
+bool restart
+bool ready
+string result_json
+RpiCameraState state

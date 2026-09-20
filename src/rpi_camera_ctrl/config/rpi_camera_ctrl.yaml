@@ -1,0 +1,43 @@
+# Camera control is streamer-agnostic (zoom / AF / AE / WB).
+# backend: mediamtx | momo
+# MediaMTX: WB and AE EV/ME sliders are live. Zoom, AF, and AE on/off restart the path.
+# momo: all changes need process restart (--libcamera-control is startup-only).
+
+ros:
+  snapshot_topic: rpi_camera/snapshot
+  get_service: rpi_camera/get_cameras
+  set_service: rpi_camera/set_camera
+  publish_hz: 1.0
+
+cameras:
+  backend: mediamtx
+  mediamtx:
+    api: http://127.0.0.1:9997
+    hls: http://127.0.0.1:8888
+    # WebRTC player page; host is replaced with the dashboard hostname in the UI.
+    webrtc: http://127.0.0.1:8889
+  momo:
+    binary: /home/arp/momo/momo-2025.1.0_raspberry-pi-os_armv8/momo
+    extra_args: ["--no-audio-device", "p2p"]
+    restart: false
+    state_path: /tmp/rov_camera_state.json
+  # Record whenever a camera is streaming. fMP4 flushes every `part`, so a
+  # sudden shutdown loses about that much. Files rotate every `segment`.
+  # Oldest files are deleted when remaining disk space falls below min_free.
+  record:
+    enabled: true
+    dir: /home/arp/mediamtx/recordings
+    segment: 10m
+    part: 1s
+    min_free: 10G
+    check_sec: 15
+    protect_recent_sec: 20
+  items:
+    - id: cam0
+      path: cam0
+      index: 0
+      nickname: Ceiling
+    - id: cam1
+      path: cam1
+      index: 1
+      nickname: Canopy

@@ -10,7 +10,8 @@ Nodes
    merges the latest ``ImuNavSnapshot``, publishes ``rov/monitor_value`` and republishes
    ``/imu/data_raw`` + ``/imu/mag`` (from merged values).
 3. ``monitor_value_logger/monitor_value_logger`` — subscribes ``rov/monitor_value`` and writes CSV.
-4. ``monitor_value_web/monitor_value_web`` — dashboard at ``http://<host>:8080/``.
+4. ``rpi_camera_ctrl/rpi_camera_ctrl`` — owns MediaMTX/momo camera ISP control.
+5. ``monitor_value_web/monitor_value_web`` — dashboard at ``http://<host>:8080/``.
 
 Run (after ``colcon build`` + ``source install/setup.bash``)::
 
@@ -60,6 +61,13 @@ def generate_launch_description() -> LaunchDescription:
         ),
         description="Dashboard YAML (port, temperature nicknames, gauge ranges).",
     )
+    rpi_camera_config = DeclareLaunchArgument(
+        "rpi_camera_config",
+        default_value=PathJoinSubstitution(
+            [FindPackageShare("rpi_camera_ctrl"), "config", "rpi_camera_ctrl.yaml"]
+        ),
+        description="rpi_camera_ctrl YAML (MediaMTX/momo backend, zoom/AF/AE/WB).",
+    )
 
     imu_nav = Node(
         package="imu_navigation",
@@ -94,6 +102,16 @@ def generate_launch_description() -> LaunchDescription:
         },
     )
 
+    rpi_camera = Node(
+        package="rpi_camera_ctrl",
+        executable="rpi_camera_ctrl",
+        name="rpi_camera_ctrl",
+        output="screen",
+        additional_env={
+            "RPI_CAMERA_CTRL_CONFIG": LaunchConfiguration("rpi_camera_config"),
+        },
+    )
+
     monitor_web = Node(
         package="monitor_value_web",
         executable="monitor_value_web",
@@ -111,9 +129,11 @@ def generate_launch_description() -> LaunchDescription:
             monitor_logger_config,
             snapshot_topic,
             monitor_web_config,
+            rpi_camera_config,
             imu_nav,
             monitor_pub,
             monitor_log,
+            rpi_camera,
             monitor_web,
         ]
     )

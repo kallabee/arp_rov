@@ -1,4 +1,4 @@
-from monitor_value_web.camera import (
+from rpi_camera_ctrl.camera import (
     CameraError,
     LIVE_GROUPS_BY_BACKEND,
     RESTART_GROUPS_BY_BACKEND,

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from monitor_value_web.record import (
+from rpi_camera_ctrl.record import (
     durations_equal,
     mediamtx_record_patch,
     normalize_record_config,
@@ -92,7 +92,7 @@ def test_reap_deletes_oldest_until_min_free(tmp_path, monkeypatch):
         real_unlink(self, *args, **kwargs)
         state["free"] += size
 
-    monkeypatch.setattr("monitor_value_web.record.shutil.disk_usage", fake_usage)
+    monkeypatch.setattr("rpi_camera_ctrl.record.shutil.disk_usage", fake_usage)
     monkeypatch.setattr(Path, "unlink", tracking_unlink)
 
     stats = reap_recordings(

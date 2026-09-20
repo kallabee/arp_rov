@@ -8,8 +8,14 @@ topics:
   cmd_vel: turtle1/cmd_vel
   hand_act: turtle1/hand_act
   lights: turtle1/lights
+  # Camera ISP control is owned by rpi_camera_ctrl; web is a ROS bridge only.
+  rpi_camera_snapshot: rpi_camera/snapshot
+  rpi_camera_get: rpi_camera/get_cameras
+  rpi_camera_set: rpi_camera/set_camera
 
-# Light names/order match unit_scripts/light_pwm_loop_control.py
+# Light names for the web UI. Duties are published as LightActuator on topics.lights
+# (default turtle1/lights). Hardware PWM is applied only by thruster_controller.
+# Names/order match unit_scripts/light_pwm_loop_control.py / thruster_controller light map.
 lights:
   - CeilA
   - CeilB
@@ -25,41 +31,16 @@ command:
   step_percent: 5
   echo_window_sec: 1.5
 
-# Camera control is streamer-agnostic (zoom / AF / AE / WB).
-# backend: mediamtx | momo
-# MediaMTX: WB and AE EV/ME sliders are live. Zoom, AF, and AE on/off restart the path.
-# momo: all changes need process restart (--libcamera-control is startup-only).
+# UI fallback until rpi_camera_ctrl publishes. Backend/MediaMTX/record live in
+# rpi_camera_ctrl/config/rpi_camera_ctrl.yaml.
 cameras:
-  backend: mediamtx
-  mediamtx:
-    api: http://127.0.0.1:9997
-    hls: http://127.0.0.1:8888
-    # WebRTC player page; host is replaced with the dashboard hostname in the UI.
-    webrtc: http://127.0.0.1:8889
-  momo:
-    binary: /home/arp/momo/momo-2025.1.0_raspberry-pi-os_armv8/momo
-    extra_args: ["--no-audio-device", "p2p"]
-    restart: false
-    state_path: /tmp/rov_camera_state.json
-  # Record whenever a camera is streaming. fMP4 flushes every `part`, so a
-  # sudden shutdown loses about that much. Files rotate every `segment`.
-  # Oldest files are deleted when remaining disk space falls below min_free.
-  record:
-    enabled: true
-    dir: /home/arp/mediamtx/recordings
-    segment: 10m
-    part: 1s
-    min_free: 10G
-    check_sec: 15
-    protect_recent_sec: 20
+  webrtc: http://127.0.0.1:8889
   items:
     - id: cam0
       path: cam0
-      index: 0
       nickname: Ceiling
     - id: cam1
       path: cam1
-      index: 1
       nickname: Canopy
 
 stale_sec: 3.0

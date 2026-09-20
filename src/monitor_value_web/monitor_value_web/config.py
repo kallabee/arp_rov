@@ -5,9 +5,7 @@ from typing import Any
 
 import yaml
 
-from monitor_value_web.camera import public_camera_meta
 from monitor_value_web.command import DEFAULT_LIGHTS
-from monitor_value_web.record import normalize_record_config, recording_public_meta
 
 DEFAULT_CAMERAS = [
     {"id": "cam0", "path": "cam0", "nickname": "Ceiling"},
@@ -15,7 +13,17 @@ DEFAULT_CAMERAS = [
 ]
 
 
-def _cameras(raw: Any) -> dict[str, Any]:
+def _camera_ros(raw: Any) -> dict[str, Any]:
+    src = raw if isinstance(raw, dict) else {}
+    return {
+        "snapshot_topic": str(src.get("snapshot_topic") or "rpi_camera/snapshot"),
+        "get_service": str(src.get("get_service") or "rpi_camera/get_cameras"),
+        "set_service": str(src.get("set_service") or "rpi_camera/set_camera"),
+    }
+
+
+def _cameras_ui(raw: Any) -> dict[str, Any]:
+    """UI fallback metadata until rpi_camera_ctrl publishes a snapshot."""
     src = raw if isinstance(raw, dict) else {}
     items_raw = src.get("items")
     items: list[dict[str, Any]] = []
@@ -24,35 +32,25 @@ def _cameras(raw: Any) -> dict[str, Any]:
             if not isinstance(item, dict) or not item.get("id"):
                 continue
             cam_id = str(item["id"])
-            row: dict[str, Any] = {
-                "id": cam_id,
-                "path": str(item.get("path") or cam_id),
-                "nickname": str(item.get("nickname") or cam_id),
-            }
-            if "index" in item:
-                row["index"] = int(item["index"])
-            items.append(row)
+            items.append(
+                {
+                    "id": cam_id,
+                    "path": str(item.get("path") or cam_id),
+                    "nickname": str(item.get("nickname") or cam_id),
+                }
+            )
     if not items:
         items = [dict(x) for x in DEFAULT_CAMERAS]
-    backend = str(src.get("backend") or "mediamtx").strip().lower()
-    momo_raw = src.get("momo") if isinstance(src.get("momo"), dict) else {}
-    mtx_raw = src.get("mediamtx") if isinstance(src.get("mediamtx"), dict) else {}
+    webrtc = str(
+        src.get("webrtc")
+        or ((src.get("mediamtx") or {}) if isinstance(src.get("mediamtx"), dict) else {}).get(
+            "webrtc"
+        )
+        or "http://127.0.0.1:8889"
+    )
     return {
-        "backend": backend,
-        "api": str(mtx_raw.get("api") or src.get("api") or "http://127.0.0.1:9997"),
-        "mediamtx": {
-            "api": str(mtx_raw.get("api") or src.get("api") or "http://127.0.0.1:9997"),
-            "hls": str(mtx_raw.get("hls") or "http://127.0.0.1:8888"),
-            "webrtc": str(mtx_raw.get("webrtc") or "http://127.0.0.1:8889"),
-        },
-        "momo": {
-            "binary": str(momo_raw.get("binary") or "momo"),
-            "extra_args": list(momo_raw.get("extra_args") or ["--no-audio-device", "p2p"]),
-            "restart": bool(momo_raw.get("restart", False)),
-            "state_path": str(momo_raw.get("state_path") or "/tmp/rov_camera_state.json"),
-        },
+        "webrtc": webrtc.rstrip("/"),
         "items": items,
-        "record": normalize_record_config(src.get("record")),
     }
 
 
@@ -68,6 +66,7 @@ def load_web_config(path: Path) -> dict[str, Any]:
         lights = [str(x) for x in lights_raw]
     else:
         lights = list(DEFAULT_LIGHTS)
+    camera_ros_raw = topics if isinstance(topics, dict) else {}
     return {
         "http": {
             "host": str(http.get("host", "0.0.0.0")),
@@ -79,7 +78,19 @@ def load_web_config(path: Path) -> dict[str, Any]:
             "cmd_vel": str(topics.get("cmd_vel", "turtle1/cmd_vel")),
             "hand_act": str(topics.get("hand_act", "turtle1/hand_act")),
             "lights": str(topics.get("lights", "turtle1/lights")),
+            "rpi_camera_snapshot": str(
+                topics.get("rpi_camera_snapshot") or "rpi_camera/snapshot"
+            ),
+            "rpi_camera_get": str(topics.get("rpi_camera_get") or "rpi_camera/get_cameras"),
+            "rpi_camera_set": str(topics.get("rpi_camera_set") or "rpi_camera/set_camera"),
         },
+        "camera_ros": _camera_ros(
+            {
+                "snapshot_topic": camera_ros_raw.get("rpi_camera_snapshot"),
+                "get_service": camera_ros_raw.get("rpi_camera_get"),
+                "set_service": camera_ros_raw.get("rpi_camera_set"),
+            }
+        ),
         "stale_sec": float(raw.get("stale_sec", 3.0)),
         "imu_min_interval_sec": float(raw.get("imu_min_interval_sec", 0.1)),
         "temperatures": list(raw.get("temperatures") or []),
@@ -91,11 +102,25 @@ def load_web_config(path: Path) -> dict[str, Any]:
             "step_percent": float(command.get("step_percent", 5)),
             "echo_window_sec": float(command.get("echo_window_sec", 1.5)),
         },
-        "cameras": _cameras(raw.get("cameras")),
+        "cameras": _cameras_ui(raw.get("cameras")),
     }
 
 
-def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
+def public_config(cfg: dict[str, Any], camera_meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    cameras = dict(camera_meta) if camera_meta else {}
+    fallback = cfg.get("cameras") or {}
+    if not cameras.get("items"):
+        cameras.setdefault("items", list(fallback.get("items") or []))
+    if not cameras.get("webrtc"):
+        cameras["webrtc"] = str(fallback.get("webrtc") or "http://127.0.0.1:8889")
+    cameras.setdefault("backend", "mediamtx")
+    cameras.setdefault("zoom", [])
+    cameras.setdefault("live", [])
+    cameras.setdefault("restart", [])
+    cameras.setdefault(
+        "record",
+        {"enabled": False, "dir": "", "segment": "", "part": "", "min_free_bytes": 0},
+    )
     return {
         "stale_sec": cfg["stale_sec"],
         "temperatures": cfg["temperatures"],
@@ -107,15 +132,5 @@ def public_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "command": {
             "step_percent": cfg["command"]["step_percent"],
         },
-        "cameras": {
-            **public_camera_meta(
-                cfg.get("cameras", {}).get("items") or [],
-                str((cfg.get("cameras") or {}).get("backend") or "mediamtx"),
-                webrtc=str(
-                    ((cfg.get("cameras") or {}).get("mediamtx") or {}).get("webrtc")
-                    or "http://127.0.0.1:8889"
-                ),
-            ),
-            "record": recording_public_meta((cfg.get("cameras") or {}).get("record") or {}),
-        },
+        "cameras": cameras,
     }

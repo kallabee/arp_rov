@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import unquote, urlparse
 
-from monitor_value_web.camera import CameraController, CameraError
+from monitor_value_web.camera_bridge import CameraBridgeError, RosCameraBridge
 from monitor_value_web.command import (
     EchoFilter,
     default_command,
@@ -22,7 +22,6 @@ from monitor_value_web.command import (
     zero_twist,
 )
 from monitor_value_web.config import load_web_config, public_config
-from monitor_value_web.record import RecordingJanitor
 
 PublishFn = Callable[[dict[str, dict[str, float]]], None]
 
@@ -36,10 +35,17 @@ def _status_from_age(age: Optional[float], stale_sec: float) -> str:
 
 
 class DashboardState:
-    def __init__(self, cfg: dict[str, Any], cfg_path: Path):
+    def __init__(
+        self,
+        cfg: dict[str, Any],
+        cfg_path: Path,
+        *,
+        camera_bridge: Optional[RosCameraBridge] = None,
+    ):
         self.cfg_path = Path(cfg_path)
         self.cfg = cfg
-        self.public_cfg = public_config(cfg)
+        self._cameras = camera_bridge or RosCameraBridge()
+        self.public_cfg = public_config(cfg, self._cameras.meta())
         self._cfg_mtime = self._mtime()
         self._lock = threading.Lock()
         self._monitor: Optional[dict[str, Any]] = None
@@ -54,12 +60,9 @@ class DashboardState:
         self._echo = EchoFilter(float(cfg.get("command", {}).get("echo_window_sec", 1.5)))
         self._active_until = {"twist": 0.0, "hand": 0.0, "lights": 0.0}
         self.publish_command: Optional[PublishFn] = None
-        self._cameras = CameraController(cfg)
         self._camera_cache: Optional[dict[str, Any]] = None
         self._camera_cache_mono = 0.0
         self._camera_lock = threading.Lock()
-        self._janitor = RecordingJanitor((cfg.get("cameras") or {}).get("record") or {})
-        self._janitor.start()
 
     def _mtime(self) -> float:
         try:
@@ -88,10 +91,9 @@ class DashboardState:
             self.cfg["lights"] = loaded["lights"]
             self.cfg["command"] = loaded["command"]
             self.cfg["cameras"] = loaded["cameras"]
-            self.public_cfg = public_config(self.cfg)
-            self._cameras = CameraController(self.cfg)
+            self.cfg["camera_ros"] = loaded.get("camera_ros") or self.cfg.get("camera_ros")
+            self.public_cfg = public_config(self.cfg, self._cameras.meta())
             self._camera_cache = None
-            self._janitor.update((loaded.get("cameras") or {}).get("record") or {})
             self._cfg_mtime = mtime
             names = list(loaded["lights"])
             lights = self._command.get("lights") or {}
@@ -130,6 +132,15 @@ class DashboardState:
             self._tick += 1
             self._cond.notify_all()
 
+    def on_camera_snapshot(self, snap: dict[str, Any]) -> None:
+        with self._camera_lock:
+            self._camera_cache = dict(snap)
+            self._camera_cache_mono = time.monotonic()
+        self.public_cfg = public_config(self.cfg, self._cameras.meta())
+        with self._cond:
+            self._tick += 1
+            self._cond.notify_all()
+
     def cameras_snapshot(self, *, force: bool = False) -> dict[str, Any]:
         now = time.monotonic()
         with self._camera_lock:
@@ -139,17 +150,19 @@ class DashboardState:
                 and now - self._camera_cache_mono < 1.5
             ):
                 return dict(self._camera_cache)
-            try:
-                snap = self._cameras.snapshot()
-            except CameraError as exc:
-                snap = {**self._cameras.meta(), "state": [], "error": str(exc)}
+        try:
+            snap = self._cameras.snapshot(force=force)
+        except CameraBridgeError as exc:
+            snap = {**self._cameras.meta(), "state": [], "error": str(exc)}
+        with self._camera_lock:
             self._camera_cache = snap
             self._camera_cache_mono = now
-            return dict(snap)
+        self.public_cfg = public_config(self.cfg, self._cameras.meta())
+        return dict(snap)
 
     def apply_camera_command(self, cam_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        result = self._cameras.apply(cam_id, payload)
         with self._camera_lock:
-            result = self._cameras.apply(cam_id, payload)
             self._camera_cache = None
         with self._cond:
             self._tick += 1
@@ -214,7 +227,7 @@ class DashboardState:
         return False
 
     def stop(self) -> None:
-        self._janitor.stop()
+        return
 
     def snapshot(self) -> dict[str, Any]:
         self.refresh_config()
@@ -228,6 +241,11 @@ class DashboardState:
             leak = False
             if self._monitor is not None:
                 leak = bool(self._monitor.get("water_ch0_detected") or self._monitor.get("water_ch1_detected"))
+            cameras = (
+                dict(self._camera_cache)
+                if self._camera_cache
+                else (self._cameras.cached_snapshot() or self._cameras.meta())
+            )
             return {
                 "monitor": self._monitor,
                 "attitude": self._attitude,
@@ -239,7 +257,7 @@ class DashboardState:
                     "seq": int(self._command.get("seq") or 0),
                 },
                 "config": self.public_cfg,
-                "cameras": dict(self._camera_cache) if self._camera_cache else self._cameras.meta(),
+                "cameras": cameras,
                 "health": {
                     "ok": publisher == "live",
                     "publisher": publisher,
@@ -298,7 +316,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if path == "/api/cameras":
             try:
                 self._send_json(200, self.state.cameras_snapshot())
-            except CameraError as exc:
+            except CameraBridgeError as exc:
                 self._send_json(503, {"error": str(exc)})
             return
         self._static(path)
@@ -338,7 +356,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             try:
                 result = self.state.apply_camera_command(cam_id, payload)
-            except CameraError as exc:
+            except CameraBridgeError as exc:
                 self._send_json(400, {"error": str(exc)})
                 return
             self._send_json(200, result)

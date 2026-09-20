@@ -15,6 +15,7 @@ from rclpy.qos import qos_profile_sensor_data
 from hand_actuator_interfaces.msg import HandActuator
 from light_actuator_interfaces.msg import LightActuator
 from monitor_value_interfaces.msg import ImuNavSnapshot, MonitorValue
+from monitor_value_web.camera_bridge import RosCameraBridge
 from monitor_value_web.command import (
     hand_from_msg,
     hand_to_msg,
@@ -26,7 +27,8 @@ from monitor_value_web.command import (
 from monitor_value_web.config import load_web_config
 from monitor_value_web.convert import monitor_to_dict, snapshot_to_attitude
 from monitor_value_web.http_server import DashboardState, start_http_server
-from monitor_value_web.light_pwm import open_light_pwm_driver
+from rpi_camera_interfaces.msg import RpiCameraSnapshot
+from rpi_camera_interfaces.srv import GetRpiCameras, SetRpiCamera
 
 
 def _cfg_default_path() -> Path:
@@ -106,7 +108,8 @@ class MonitorValueWeb(Node):
         cfg_path = _cfg_default_path()
         cfg = load_web_config(cfg_path)
         self._cfg = cfg
-        self._state = DashboardState(cfg, cfg_path)
+        self._camera_bridge = RosCameraBridge()
+        self._state = DashboardState(cfg, cfg_path, camera_bridge=self._camera_bridge)
         self._last_imu_pub = 0.0
         self._http = start_http_server(
             self._state,
@@ -125,18 +128,15 @@ class MonitorValueWeb(Node):
         self.create_subscription(Twist, cfg["topics"]["cmd_vel"], self._on_twist, 10)
         self.create_subscription(HandActuator, cfg["topics"]["hand_act"], self._on_hand, 10)
         self.create_subscription(LightActuator, cfg["topics"]["lights"], self._on_lights, 10)
+        snap_topic = cfg["topics"]["rpi_camera_snapshot"]
+        self.create_subscription(RpiCameraSnapshot, snap_topic, self._on_camera_snapshot, 10)
+        get_cli = self.create_client(GetRpiCameras, cfg["topics"]["rpi_camera_get"])
+        set_cli = self.create_client(SetRpiCamera, cfg["topics"]["rpi_camera_set"])
+        self._camera_bridge.attach(self, get_cli, set_cli)
+        self.create_timer(0.05, self._camera_bridge.pump)
         self._pub_q: queue.Queue = queue.Queue()
         self.create_timer(0.02, self._drain_pub)
         self._state.publish_command = self._enqueue_command
-        self._light_pwm = None
-        try:
-            self._light_pwm = open_light_pwm_driver()
-            self._light_pwm.all_off()
-            self.get_logger().info(
-                f"Light PWM ready ({len(self._light_pwm.channels)} channels)"
-            )
-        except Exception as exc:
-            self.get_logger().warn(f"Light PWM disabled (ROS publish only): {exc}")
         if os.environ.get("MONITOR_VALUE_WEB_DEMO") == "1":
             self.create_timer(0.1, self._on_demo)
             self.get_logger().warn("DEMO mode: synthesizing monitor/attitude values")
@@ -145,8 +145,15 @@ class MonitorValueWeb(Node):
             f"http://{cfg['http']['host']}:{cfg['http']['port']}/  "
             f"monitor={cfg['topics']['monitor']} imu={cfg['topics']['imu_snapshot']} "
             f"cmd_vel={cfg['topics']['cmd_vel']} hand={cfg['topics']['hand_act']} "
-            f"lights={cfg['topics']['lights']}"
+            f"lights={cfg['topics']['lights']} camera={snap_topic} "
+            f"(ROS only; PWM via thruster_controller, cameras via rpi_camera_ctrl)"
         )
+
+    def _on_camera_snapshot(self, msg: RpiCameraSnapshot) -> None:
+        self._camera_bridge.on_snapshot_msg(msg)
+        cached = self._camera_bridge.cached_snapshot()
+        if cached is not None:
+            self._state.on_camera_snapshot(cached)
 
     def _on_monitor(self, msg: MonitorValue) -> None:
         self._state.set_monitor(monitor_to_dict(msg))
@@ -173,17 +180,8 @@ class MonitorValueWeb(Node):
                     self._hand_pub.publish(hand_to_msg(groups["hand"], HandActuator))
                 if "lights" in groups:
                     self._light_pub.publish(lights_to_msg(groups["lights"], names, LightActuator))
-                    self._apply_lights_hw(groups["lights"])
         except queue.Empty:
             return
-
-    def _apply_lights_hw(self, duties: dict) -> None:
-        if self._light_pwm is None:
-            return
-        try:
-            self._light_pwm.apply_map(duties)
-        except Exception as exc:
-            self.get_logger().warn(f"Light PWM apply failed: {exc}")
 
     def _on_twist(self, msg: Twist) -> None:
         self._state.apply_remote_command("twist", twist_from_msg(msg))
@@ -192,12 +190,9 @@ class MonitorValueWeb(Node):
         self._state.apply_remote_command("hand", hand_from_msg(msg))
 
     def _on_lights(self, msg: LightActuator) -> None:
+        # UI sync only — hardware is driven by thruster_controller on this topic.
         names = list(self._cfg.get("lights") or [])
-        data = lights_from_msg(msg, names)
-        if self._state.apply_remote_command("lights", data):
-            # Other PC / node command — drive hardware here so lights work
-            # even when thruster_controller is not running.
-            self._apply_lights_hw(data)
+        self._state.apply_remote_command("lights", lights_from_msg(msg, names))
 
     def _on_demo(self) -> None:
         t = time.monotonic()
@@ -212,6 +207,7 @@ class MonitorValueWeb(Node):
             "elapsed_hms": time.strftime("%H:%M:%S", time.gmtime(t)),
             "elapsed_since_start_sec": t,
             "rpi_fan_rpm": 3200.0,
+            "rpi_fan_pwm_percent": 48.0,
             "rpi_cpu_temp_c": 58.0 + 3.0 * math.sin(t * 0.1),
             "rpi_cpu_util_percent": 35.0,
             "rpi_gpu_util_percent": 12.0,

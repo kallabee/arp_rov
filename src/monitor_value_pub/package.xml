@@ -17,6 +17,7 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>monitor_value_logger</exec_depend>
   <exec_depend>monitor_value_web</exec_depend>
+  <exec_depend>rpi_camera_ctrl</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

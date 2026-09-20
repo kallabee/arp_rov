@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 from urllib.parse import urlparse
 
-from monitor_value_web.record import (
+from rpi_camera_ctrl.record import (
     mediamtx_record_patch,
     normalize_record_config,
     record_patch_needed,

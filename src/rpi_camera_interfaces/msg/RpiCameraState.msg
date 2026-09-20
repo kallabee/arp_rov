@@ -1,0 +1,14 @@
+string id
+string path
+string nickname
+bool ready
+string error
+string zoom
+string sensor_mode
+int32 width
+int32 height
+float32 fps
+RpiCameraFocus focus
+RpiCameraExposure exposure
+RpiCameraWb wb
+RpiCameraRecording recording

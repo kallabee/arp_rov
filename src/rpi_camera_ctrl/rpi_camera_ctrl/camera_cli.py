@@ -3,15 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-
 from pathlib import Path
 
-from monitor_value_web.camera import ZOOM_PRESETS, CameraController
-from monitor_value_web.config import load_web_config
+from rpi_camera_ctrl.camera import ZOOM_PRESETS, CameraController
+from rpi_camera_ctrl.config import load_camera_config
 
 
 def _default_cfg_path() -> Path:
-    src = Path(__file__).resolve().parents[1] / "config" / "monitor_value_web.yaml"
+    src = Path(__file__).resolve().parents[1] / "config" / "rpi_camera_ctrl.yaml"
     if src.is_file():
         return src
     return src
@@ -20,7 +19,7 @@ def _default_cfg_path() -> Path:
 def _controller(api: str | None, backend: str | None = None) -> CameraController:
     path = _default_cfg_path()
     if path.is_file():
-        cfg = load_web_config(path)
+        cfg = load_camera_config(path)
     else:
         cfg = {
             "cameras": {
@@ -32,12 +31,13 @@ def _controller(api: str | None, backend: str | None = None) -> CameraController
                 ],
             }
         }
+    cameras = cfg.setdefault("cameras", {})
     if api:
-        cfg.setdefault("cameras", {})["api"] = api
-        cfg.setdefault("cameras", {}).setdefault("mediamtx", {})["api"] = api
+        cameras["api"] = api
+        cameras.setdefault("mediamtx", {})["api"] = api
     if backend:
-        cfg.setdefault("cameras", {})["backend"] = backend
-    return CameraController(cfg)
+        cameras["backend"] = backend
+    return CameraController({"cameras": cameras})
 
 
 def main(argv: list[str] | None = None) -> int:
