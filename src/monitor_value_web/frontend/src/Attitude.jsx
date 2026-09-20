@@ -41,18 +41,24 @@ export function AttitudePanel({ attitude }) {
     applyOrbit(persp, orbit);
 
     const orthoSize = 0.55;
+    // Third-angle orthographic views (Three: X forward, Y up, Z starboard).
     const top = new THREE.OrthographicCamera(-orthoSize, orthoSize, orthoSize, -orthoSize, 0.05, 20);
     top.position.set(0, 1.4, 0);
-    top.up.set(0, 0, -1);
+    // +X (bow) toward bottom of pane so it meets Front below.
+    top.up.set(-1, 0, 0);
     top.lookAt(0, 0, 0);
 
-    const side = new THREE.OrthographicCamera(-orthoSize, orthoSize, orthoSize, -orthoSize, 0.05, 20);
-    side.position.set(0, 0, 1.4);
-    side.lookAt(0, 0, 0);
-
     const front = new THREE.OrthographicCamera(-orthoSize, orthoSize, orthoSize, -orthoSize, 0.05, 20);
-    front.position.set(-1.4, 0, 0);
+    front.position.set(1.4, 0, 0);
+    front.up.set(0, 1, 0);
     front.lookAt(0, 0, 0);
+
+    const side = new THREE.OrthographicCamera(-orthoSize, orthoSize, orthoSize, -orthoSize, 0.05, 20);
+    // Right-side view: from starboard (+Z). Mirror so bow faces Front (left).
+    side.position.set(0, 0, 1.4);
+    side.up.set(0, 1, 0);
+    side.lookAt(0, 0, 0);
+    side.scale.x = -1;
 
     const drag = { on: false, x: 0, y: 0 };
     st.current = {
@@ -141,12 +147,12 @@ export function AttitudePanel({ attitude }) {
   return (
     <div className="card card-fill">
       <h2>Attitude · IMU {attitude?.source === "snapshot" ? "(10 Hz)" : attitude?.source === "monitor" ? "(1 Hz)" : ""}</h2>
-      <div ref={wrapRef} className="attitude-grid">
+      <div ref={wrapRef} className="attitude-grid attitude-third-angle">
         <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+        <ViewLabel title="Top · plan" rpy={rpy} />
         <ViewLabel title="3D · drag" rpy={rpy} />
-        <ViewLabel title="Top (yaw)" rpy={rpy} />
-        <ViewLabel title="Side (pitch)" rpy={rpy} />
-        <ViewLabel title="Front (roll)" rpy={rpy} />
+        <ViewLabel title="Front" rpy={rpy} />
+        <ViewLabel title="Right · side" rpy={rpy} />
       </div>
     </div>
   );
@@ -162,10 +168,11 @@ function ViewLabel({ title, rpy }) {
 }
 
 function in3d(ev, wrap) {
+  // 3D pane is top-right in third-angle layout.
   const r = wrap.getBoundingClientRect();
   const x = ev.clientX - r.left;
   const y = ev.clientY - r.top;
-  return x >= 0 && y >= 0 && x < r.width / 2 && y < r.height / 2;
+  return x >= r.width / 2 && y >= 0 && y < r.height / 2;
 }
 
 function applyOrbit(cam, orbit) {
@@ -310,11 +317,12 @@ function renderViews(s) {
   if (w < 2 || h < 2) return;
   const hw = w / 2;
   const hh = h / 2;
+  // Third-angle: Top | 3D / Front | Right  (WebGL y origin = bottom).
   const views = [
-    { cam: cameras.persp, x: 0, y: hh, ww: hw, hh },
-    { cam: cameras.top, x: hw, y: hh, ww: hw, hh },
-    { cam: cameras.side, x: 0, y: 0, ww: hw, hh },
-    { cam: cameras.front, x: hw, y: 0, ww: hw, hh },
+    { cam: cameras.top, x: 0, y: hh, ww: hw, hh },
+    { cam: cameras.persp, x: hw, y: hh, ww: hw, hh },
+    { cam: cameras.front, x: 0, y: 0, ww: hw, hh },
+    { cam: cameras.side, x: hw, y: 0, ww: hw, hh },
   ];
   for (const v of views) {
     renderer.setViewport(v.x, v.y, v.ww, v.hh);
