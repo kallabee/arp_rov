@@ -85,5 +85,6 @@ gauges:
   rpi_cpu_util_percent: { min: 0, max: 100, warn: 85, alarm: 95 }
   rpi_gpu_util_percent: { min: 0, max: 100, warn: 85, alarm: 95 }
   rpi_fan_rpm: { min: 0, max: 8000 }
+  rpi_fan_pwm_percent: { min: 0, max: 100 }
   bme_humidity_percent: { min: 0, max: 100, warn: 80, alarm: 90 }
   bme_pressure_atm: { min: 0.8, max: 1.2 }

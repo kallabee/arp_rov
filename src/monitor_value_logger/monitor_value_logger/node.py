@@ -38,6 +38,7 @@ def _msg_to_values(msg: MonitorValue) -> MonitorValues:
     v = replace(
         v,
         rpi_fan_rpm=float(msg.rpi_fan_rpm),
+        rpi_fan_pwm_percent=float(msg.rpi_fan_pwm_percent),
         rpi_cpu_temp_c=float(msg.rpi_cpu_temp_c),
         rpi_cpu_util_percent=float(msg.rpi_cpu_util_percent),
         rpi_gpu_util_percent=float(msg.rpi_gpu_util_percent),

@@ -54,6 +54,7 @@ def _values_to_msg(node: Node, v) -> MonitorValue:
     m.elapsed_since_start_sec = float(v.elapsed_since_start_sec)
 
     m.rpi_fan_rpm = float(v.rpi_fan_rpm)
+    m.rpi_fan_pwm_percent = float(v.rpi_fan_pwm_percent)
     m.rpi_cpu_temp_c = float(v.rpi_cpu_temp_c)
     m.rpi_cpu_util_percent = float(v.rpi_cpu_util_percent)
     m.rpi_gpu_util_percent = float(v.rpi_gpu_util_percent)

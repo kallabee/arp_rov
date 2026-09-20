@@ -4,6 +4,7 @@ float64 elapsed_since_start_sec
 
 # RPi
 float64 rpi_fan_rpm
+float64 rpi_fan_pwm_percent
 float64 rpi_cpu_temp_c
 float64 rpi_cpu_util_percent
 float64 rpi_gpu_util_percent

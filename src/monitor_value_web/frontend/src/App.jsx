@@ -234,9 +234,10 @@ export default function App() {
           </div>
           <div className="card card-compact">
             <h2>RPi</h2>
-            <div className="gauge-row">
+            <div className="gauge-row gauge-row-4">
               <Dial label="CPU" unit="%" value={monitor?.rpi_cpu_util_percent} spec={gauges.rpi_cpu_util_percent} digits={1} />
               <Dial label="GPU" unit="%" value={monitor?.rpi_gpu_util_percent} spec={gauges.rpi_gpu_util_percent} digits={1} />
+              <Dial label="Fan(PWM)" unit="%" value={monitor?.rpi_fan_pwm_percent} spec={gauges.rpi_fan_pwm_percent} digits={0} />
               <Dial label="Fan" unit="rpm" value={monitor?.rpi_fan_rpm} spec={gauges.rpi_fan_rpm} digits={0} />
             </div>
           </div>

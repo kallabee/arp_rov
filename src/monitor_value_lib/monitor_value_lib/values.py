@@ -21,6 +21,7 @@ class MonitorValues:
 
     # RPi
     rpi_fan_rpm: float = _nan()
+    rpi_fan_pwm_percent: float = _nan()
     rpi_cpu_temp_c: float = _nan()
     rpi_cpu_util_percent: float = _nan()
     rpi_gpu_util_percent: float = _nan()

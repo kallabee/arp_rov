@@ -12,6 +12,7 @@ from monitor_value_lib.values import MonitorValues
 # Tag groups for TensorBoard sidebar (prefix/name).
 _SCALAR_TAGS: tuple[tuple[str, str], ...] = (
     ("rpi/fan_rpm", "rpi_fan_rpm"),
+    ("rpi/fan_pwm_percent", "rpi_fan_pwm_percent"),
     ("rpi/cpu_temp_c", "rpi_cpu_temp_c"),
     ("rpi/cpu_util_percent", "rpi_cpu_util_percent"),
     ("rpi/gpu_util_percent", "rpi_gpu_util_percent"),

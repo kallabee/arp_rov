@@ -28,6 +28,7 @@ def _tick(state: DashboardState, t: float) -> None:
         "elapsed_hms": time.strftime("%H:%M:%S", time.gmtime(t)),
         "elapsed_since_start_sec": t,
         "rpi_fan_rpm": 3200.0,
+        "rpi_fan_pwm_percent": 48.0,
         "rpi_cpu_temp_c": 58.0 + 3.0 * math.sin(t * 0.1),
         "rpi_cpu_util_percent": 35.0,
         "rpi_gpu_util_percent": 12.0,

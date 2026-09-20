@@ -9,6 +9,7 @@ JST = timezone(timedelta(hours=9))
 _MONITOR_FLOATS = (
     "elapsed_since_start_sec",
     "rpi_fan_rpm",
+    "rpi_fan_pwm_percent",
     "rpi_cpu_temp_c",
     "rpi_cpu_util_percent",
     "rpi_gpu_util_percent",
