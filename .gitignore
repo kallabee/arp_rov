@@ -9,3 +9,24 @@ pigpio-master/
 __pycache__/
 .pytest_cache/
 node_modules/
+
+# Crash dumps
+core
+**/core
+
+# Local scratch / vendor checkouts (not this ROS workspace)
+get-pip.py
+master.zip
+luma/
+src/eclipse-cyclonedds/
+src/ros2/
+src/ros_tutorials/
+destfile
+sourcefile
+resolv.conf.org
+unit_scripts/SourceHanSansJP-Medium.otf
+unit_scripts/ms5837-python/
+unit_scripts/unit_script
+unit_scripts/test.py
+progress.md
+

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Source ROS + workspace, then launch IMU + monitor pub + logger (+ web if in launch).
+# Source ROS + workspace, then launch IMU + monitor pub + logger + web + camera.
+# Prefer unit_scripts/start_dashboard.sh — it refuses duplicate launches and can restart.
 set -euo pipefail
 WS="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck disable=SC1091
