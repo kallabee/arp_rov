@@ -17,6 +17,12 @@ const HAND_AXES = [
 
 const ZERO_TWIST = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0 };
 const ZERO_HAND = { grab: 0, roll: 0 };
+const ALL_TWIST_ON = Object.fromEntries(TWIST_AXES.map((ax) => [ax.key, true]));
+const ALL_TWIST_OFF = Object.fromEntries(TWIST_AXES.map((ax) => [ax.key, false]));
+const ALL_HAND_ON = Object.fromEntries(HAND_AXES.map((ax) => [ax.key, true]));
+const ALL_HAND_OFF = Object.fromEntries(HAND_AXES.map((ax) => [ax.key, false]));
+// thruster_controller decays cmd_vel / hand after 50ms without a new message.
+const TWIST_KEEPALIVE_MS = 40;
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
@@ -34,11 +40,12 @@ function roundPct(v) {
   return Math.round(v);
 }
 
-function pickIfChanged(prev, next) {
-  for (const key of Object.keys(next)) {
-    if (prev[key] !== next[key]) return next;
-  }
-  return prev;
+function twistIsActive(t) {
+  return TWIST_AXES.some((ax) => Math.abs(Number(t?.[ax.key]) || 0) > 1e-4);
+}
+
+function handIsActive(t) {
+  return HAND_AXES.some((ax) => Math.abs(Number(t?.[ax.key]) || 0) > 1e-4);
 }
 
 function loadHandDefault() {
@@ -64,7 +71,9 @@ async function postCommand(body) {
 export function ControlDock({ command, lights, stepPercent = 5, children }) {
   const lightNames = Array.isArray(lights) && lights.length ? lights : [];
   const [twist, setTwist] = useState(ZERO_TWIST);
+  const [twistEnabled, setTwistEnabled] = useState(ALL_TWIST_ON);
   const [hand, setHand] = useState(loadHandDefault);
+  const [handEnabled, setHandEnabled] = useState(ALL_HAND_ON);
   const [lightDuty, setLightDuty] = useState(() => Object.fromEntries(lightNames.map((n) => [n, 0])));
   const [lightEnabled, setLightEnabled] = useState(() => Object.fromEntries(lightNames.map((n) => [n, false])));
   const interacting = useRef({ twist: false, hand: false, lights: false });
@@ -73,6 +82,10 @@ export function ControlDock({ command, lights, stepPercent = 5, children }) {
   const queued = useRef({ twist: null, hand: null, lights: null });
   const lightEnabledRef = useRef(lightEnabled);
   lightEnabledRef.current = lightEnabled;
+  const twistEnabledRef = useRef(twistEnabled);
+  twistEnabledRef.current = twistEnabled;
+  const handEnabledRef = useRef(handEnabled);
+  handEnabledRef.current = handEnabled;
   const latest = useRef({ twist, hand, lights: lightDuty });
   latest.current = { twist, hand, lights: lightDuty };
 
@@ -86,6 +99,22 @@ export function ControlDock({ command, lights, stepPercent = 5, children }) {
     const out = {};
     for (const name of lightNames) {
       out[name] = enabled[name] ? (duty[name] ?? 0) : 0;
+    }
+    return out;
+  };
+
+  const buildTwistOutput = (duty, enabled) => {
+    const out = {};
+    for (const ax of TWIST_AXES) {
+      out[ax.key] = enabled[ax.key] ? (duty[ax.key] ?? 0) : 0;
+    }
+    return out;
+  };
+
+  const buildHandOutput = (duty, enabled) => {
+    const out = {};
+    for (const ax of HAND_AXES) {
+      out[ax.key] = enabled[ax.key] ? (duty[ax.key] ?? 0) : 0;
     }
     return out;
   };
@@ -106,20 +135,35 @@ export function ControlDock({ command, lights, stepPercent = 5, children }) {
   useEffect(() => {
     if (!command) return;
     if (!interacting.current.twist && command.twist) {
-      setTwist((prev) => pickIfChanged(prev, {
-        x: clamp(Number(command.twist.x) || 0, -1, 1),
-        y: clamp(Number(command.twist.y) || 0, -1, 1),
-        z: clamp(Number(command.twist.z) || 0, -1, 1),
-        yaw: clamp(Number(command.twist.yaw) || 0, -1, 1),
-        pitch: clamp(Number(command.twist.pitch) || 0, -1, 1),
-        roll: clamp(Number(command.twist.roll) || 0, -1, 1),
-      }));
+      setTwist((prev) => {
+        const next = { ...prev };
+        let changed = false;
+        for (const ax of TWIST_AXES) {
+          if (command.twist[ax.key] == null) continue;
+          const v = clamp(Number(command.twist[ax.key]) || 0, -1, 1);
+          // Keep slider when output is off (0); only adopt remote non-zero levels.
+          if (Math.abs(v) > 1e-4 && next[ax.key] !== v) {
+            next[ax.key] = v;
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
     }
     if (!interacting.current.hand && command.hand) {
-      setHand((prev) => pickIfChanged(prev, {
-        grab: clamp(Number(command.hand.grab) || 0, -1, 1),
-        roll: clamp(Number(command.hand.roll) || 0, -1, 1),
-      }));
+      setHand((prev) => {
+        const next = { ...prev };
+        let changed = false;
+        for (const ax of HAND_AXES) {
+          if (command.hand[ax.key] == null) continue;
+          const v = clamp(Number(command.hand[ax.key]) || 0, -1, 1);
+          if (Math.abs(v) > 1e-4 && next[ax.key] !== v) {
+            next[ax.key] = v;
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
     }
     if (!interacting.current.lights && command.lights) {
       setLightDuty((prev) => {
@@ -152,8 +196,8 @@ export function ControlDock({ command, lights, stepPercent = 5, children }) {
     }
   }, [command, lights, lightNames]);
 
-  const sendGroup = useCallback((group, payload) => {
-    interacting.current[group] = true;
+  const sendGroup = useCallback((group, payload, opts = {}) => {
+    if (!opts.keepalive) interacting.current[group] = true;
     queued.current[group] = payload;
     if (sending.current[group]) return;
     sending.current[group] = true;
@@ -173,17 +217,120 @@ export function ControlDock({ command, lights, stepPercent = 5, children }) {
     pump();
   }, []);
 
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      const twistOut = buildTwistOutput(latest.current.twist, twistEnabledRef.current);
+      if (twistIsActive(twistOut)) sendGroup("twist", twistOut, { keepalive: true });
+      const handOut = buildHandOutput(latest.current.hand, handEnabledRef.current);
+      if (handIsActive(handOut)) sendGroup("hand", handOut, { keepalive: true });
+    }, TWIST_KEEPALIVE_MS);
+    const stopActuators = () => {
+      const body = JSON.stringify({ twist: ZERO_TWIST, hand: ZERO_HAND });
+      try {
+        navigator.sendBeacon?.("/api/command", new Blob([body], { type: "application/json" }));
+      } catch (_) { /* ignore */ }
+    };
+    const onHide = () => {
+      if (typeof document !== "undefined" && document.hidden) stopActuators();
+    };
+    window.addEventListener("pagehide", stopActuators);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("pagehide", stopActuators);
+      document.removeEventListener("visibilitychange", onHide);
+    };
+  }, [sendGroup]);
+
   const changeTwist = (key, percent) => {
     const next = { ...latest.current.twist, [key]: toUnit(percent) };
+    latest.current.twist = next;
     setTwist(next);
-    sendGroup("twist", next);
+    sendGroup("twist", buildTwistOutput(next, twistEnabledRef.current));
+  };
+
+  const twistOff = (key) => {
+    const enabled = { ...twistEnabledRef.current, [key]: false };
+    twistEnabledRef.current = enabled;
+    setTwistEnabled(enabled);
+    sendGroup("twist", buildTwistOutput(latest.current.twist, enabled));
+  };
+
+  const twistOn = (key) => {
+    const enabled = { ...twistEnabledRef.current, [key]: true };
+    twistEnabledRef.current = enabled;
+    setTwistEnabled(enabled);
+    sendGroup("twist", buildTwistOutput(latest.current.twist, enabled));
+  };
+
+  const twistAllOff = () => {
+    twistEnabledRef.current = ALL_TWIST_OFF;
+    setTwistEnabled(ALL_TWIST_OFF);
+    pointerDown.current.twist = false;
+    queued.current.twist = null;
+    sendGroup("twist", { ...ZERO_TWIST });
+  };
+
+  const twistAllOn = () => {
+    twistEnabledRef.current = ALL_TWIST_ON;
+    setTwistEnabled(ALL_TWIST_ON);
+    pointerDown.current.twist = false;
+    queued.current.twist = null;
+    sendGroup("twist", buildTwistOutput(latest.current.twist, ALL_TWIST_ON));
+  };
+
+  const twistAllReset = () => {
+    const next = { ...ZERO_TWIST };
+    latest.current.twist = next;
+    setTwist(next);
+    sendGroup("twist", buildTwistOutput(next, twistEnabledRef.current));
   };
 
   const changeHand = (key, percent) => {
     const next = { ...latest.current.hand, [key]: toUnit(percent) };
+    latest.current.hand = next;
     setHand(next);
     saveUiPrefs({ hand: next });
-    sendGroup("hand", next);
+    sendGroup("hand", buildHandOutput(next, handEnabledRef.current));
+  };
+
+  const handOff = (key) => {
+    const enabled = { ...handEnabledRef.current, [key]: false };
+    handEnabledRef.current = enabled;
+    setHandEnabled(enabled);
+    sendGroup("hand", buildHandOutput(latest.current.hand, enabled));
+  };
+
+  const handOn = (key) => {
+    const enabled = { ...handEnabledRef.current, [key]: true };
+    handEnabledRef.current = enabled;
+    setHandEnabled(enabled);
+    sendGroup("hand", buildHandOutput(latest.current.hand, enabled));
+  };
+
+  const handAllOff = () => {
+    handEnabledRef.current = ALL_HAND_OFF;
+    setHandEnabled(ALL_HAND_OFF);
+    pointerDown.current.hand = false;
+    queued.current.hand = null;
+    sendGroup("hand", { ...ZERO_HAND });
+  };
+
+  const handAllOn = () => {
+    handEnabledRef.current = ALL_HAND_ON;
+    setHandEnabled(ALL_HAND_ON);
+    pointerDown.current.hand = false;
+    queued.current.hand = null;
+    sendGroup("hand", buildHandOutput(latest.current.hand, ALL_HAND_ON));
+  };
+
+  const handAllReset = () => {
+    const next = { ...ZERO_HAND };
+    latest.current.hand = next;
+    setHand(next);
+    saveUiPrefs({ hand: next });
+    sendGroup("hand", buildHandOutput(next, handEnabledRef.current));
   };
 
   const changeLight = (name, percent) => {
@@ -221,7 +368,13 @@ export function ControlDock({ command, lights, stepPercent = 5, children }) {
     queued.current.twist = null;
     queued.current.hand = null;
     setTwist(ZERO_TWIST);
+    latest.current.twist = { ...ZERO_TWIST };
+    twistEnabledRef.current = ALL_TWIST_OFF;
+    setTwistEnabled(ALL_TWIST_OFF);
     setHand(ZERO_HAND);
+    latest.current.hand = { ...ZERO_HAND };
+    handEnabledRef.current = ALL_HAND_OFF;
+    setHandEnabled(ALL_HAND_OFF);
     saveUiPrefs({ hand: ZERO_HAND });
     sending.current.twist = true;
     sending.current.hand = true;
@@ -254,6 +407,13 @@ export function ControlDock({ command, lights, stepPercent = 5, children }) {
     sendGroup("lights", buildLightOutput(duty, enabled));
   };
 
+  const lightsAllReset = () => {
+    const duty = Object.fromEntries(lightNames.map((name) => [name, 0]));
+    setLightDuty(duty);
+    latest.current.lights = duty;
+    sendGroup("lights", buildLightOutput(duty, lightEnabledRef.current));
+  };
+
   const onFaderActive = (group, active) => {
     pointerDown.current[group] = active;
     if (active) interacting.current[group] = true;
@@ -265,48 +425,89 @@ export function ControlDock({ command, lights, stepPercent = 5, children }) {
     if (handSeeded.current) return;
     handSeeded.current = true;
     const h = loadHandDefault();
-    if (h.grab !== 0 || h.roll !== 0) {
-      sendGroup("hand", h);
+    latest.current.hand = h;
+    if (handIsActive(h)) {
+      sendGroup("hand", buildHandOutput(h, handEnabledRef.current));
     }
   }, [sendGroup]);
 
   return (
     <div className="control-dock">
       <div className="control-top">
-        <div className="card control-card">
-          <h2>Thrusters</h2>
-          <div className="fader-row">
-            {TWIST_AXES.map((ax) => (
-              <Fader
-                key={ax.key}
-                label={ax.label}
-                value={toPercent(twist[ax.key])}
-                min={-100}
-                max={100}
-                step={stepPercent}
-                bipolar
-                onChange={(v) => changeTwist(ax.key, v)}
-                onActive={(a) => onFaderActive("twist", a)}
-              />
-            ))}
+        <div className="control-lights-wrap">
+          <div className="card control-card">
+            <h2>Thrusters</h2>
+            <div className="fader-row">
+              {TWIST_AXES.map((ax) => (
+                <Fader
+                  key={ax.key}
+                  label={ax.label}
+                  value={toPercent(twist[ax.key])}
+                  min={-100}
+                  max={100}
+                  step={stepPercent}
+                  bipolar
+                  outputSwitch
+                  lit={Boolean(twistEnabled[ax.key])}
+                  onChange={(v) => changeTwist(ax.key, v)}
+                  onOff={() => twistOff(ax.key)}
+                  onOn={() => twistOn(ax.key)}
+                  onActive={(a) => onFaderActive("twist", a)}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="lights-bulk">
+            <button className="lights-on" type="button" onClick={twistAllOn}>
+              <span>All on</span>
+              <b>I</b>
+            </button>
+            <button className="lights-off" type="button" onClick={twistAllOff}>
+              <span>All off</span>
+              <b>O</b>
+            </button>
+            <button className="lights-off" type="button" onClick={twistAllReset}>
+              <span>All reset</span>
+              <b>0</b>
+            </button>
           </div>
         </div>
-        <div className="card control-card">
-          <h2>Manipulators</h2>
-          <div className="fader-row">
-            {HAND_AXES.map((ax) => (
-              <Fader
-                key={ax.key}
-                label={ax.label}
-                value={toPercent(hand[ax.key])}
-                min={-100}
-                max={100}
-                step={stepPercent}
-                bipolar
-                onChange={(v) => changeHand(ax.key, v)}
-                onActive={(a) => onFaderActive("hand", a)}
-              />
-            ))}
+        <div className="control-lights-wrap">
+          <div className="card control-card">
+            <h2>Manipulators</h2>
+            <div className="fader-row">
+              {HAND_AXES.map((ax) => (
+                <Fader
+                  key={ax.key}
+                  label={ax.label}
+                  value={toPercent(hand[ax.key])}
+                  min={-100}
+                  max={100}
+                  step={stepPercent}
+                  bipolar
+                  outputSwitch
+                  lit={Boolean(handEnabled[ax.key])}
+                  onChange={(v) => changeHand(ax.key, v)}
+                  onOff={() => handOff(ax.key)}
+                  onOn={() => handOn(ax.key)}
+                  onActive={(a) => onFaderActive("hand", a)}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="lights-bulk">
+            <button className="lights-on" type="button" onClick={handAllOn}>
+              <span>All on</span>
+              <b>I</b>
+            </button>
+            <button className="lights-off" type="button" onClick={handAllOff}>
+              <span>All off</span>
+              <b>O</b>
+            </button>
+            <button className="lights-off" type="button" onClick={handAllReset}>
+              <span>All reset</span>
+              <b>0</b>
+            </button>
           </div>
         </div>
         <button className="estop" type="button" onClick={estop}>
@@ -326,7 +527,7 @@ export function ControlDock({ command, lights, stepPercent = 5, children }) {
                 min={0}
                 max={100}
                 step={stepPercent}
-                lightSwitch
+                outputSwitch
                 lit={Boolean(lightEnabled[name])}
                 onChange={(v) => changeLight(name, v)}
                 onOff={() => lightOff(name)}
@@ -337,13 +538,17 @@ export function ControlDock({ command, lights, stepPercent = 5, children }) {
           </div>
         </div>
         <div className="lights-bulk">
-          <button className="lights-off" type="button" onClick={lightsAllOff}>
-            <span>All off</span>
-            <b>0</b>
-          </button>
           <button className="lights-on" type="button" onClick={lightsAllOn}>
             <span>All on</span>
             <b>100</b>
+          </button>
+          <button className="lights-off" type="button" onClick={lightsAllOff}>
+            <span>All off</span>
+            <b>O</b>
+          </button>
+          <button className="lights-off" type="button" onClick={lightsAllReset}>
+            <span>All reset</span>
+            <b>0</b>
           </button>
         </div>
       </div>
@@ -359,7 +564,7 @@ function Fader({
   max,
   step,
   bipolar = false,
-  lightSwitch = false,
+  outputSwitch = false,
   lit = false,
   onChange,
   onOff,
@@ -367,8 +572,11 @@ function Fader({
   onActive,
 }) {
   const trackRef = useRef(null);
-  const holdRef = useRef(null);
+  const holdTimerRef = useRef(null);
+  const holdRepeatRef = useRef(null);
   const pct = roundPct(clamp(value, min, max));
+  const pctRef = useRef(pct);
+  pctRef.current = pct;
   const span = max - min || 1;
   const t = (pct - min) / span;
   const fillFrom = bipolar ? (0 - min) / span : 0;
@@ -385,23 +593,29 @@ function Fader({
   };
 
   const nudge = (dir) => {
-    onChange(roundPct(clamp(pct + dir * step, min, max)));
+    const next = roundPct(clamp(pctRef.current + dir * step, min, max));
+    pctRef.current = next;
+    onChange(next);
   };
 
   const startHold = (dir) => {
     onActive?.(true);
-    nudge(dir);
     clearHold();
-    holdRef.current = setTimeout(() => {
-      holdRef.current = setInterval(() => nudge(dir), 80);
-    }, 380);
+    nudge(dir);
+    holdTimerRef.current = setTimeout(() => {
+      holdTimerRef.current = null;
+      holdRepeatRef.current = setInterval(() => nudge(dir), 70);
+    }, 280);
   };
 
   const clearHold = () => {
-    if (holdRef.current) {
-      clearTimeout(holdRef.current);
-      clearInterval(holdRef.current);
-      holdRef.current = null;
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    if (holdRepeatRef.current) {
+      clearInterval(holdRepeatRef.current);
+      holdRepeatRef.current = null;
     }
   };
 
@@ -422,8 +636,13 @@ function Fader({
     onActive?.(false);
   };
 
+  useEffect(() => () => {
+    if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+    if (holdRepeatRef.current) clearInterval(holdRepeatRef.current);
+  }, []);
+
   return (
-    <div className={`fader${lightSwitch && lit ? " lit" : ""}`}>
+    <div className={`fader${outputSwitch && lit ? " lit" : ""}`}>
       <div className="fader-val">{pct}%</div>
       <button
         type="button"
@@ -436,6 +655,7 @@ function Fader({
         }}
         onPointerUp={endActive}
         onPointerCancel={endActive}
+        onLostPointerCapture={endActive}
       >
         +
       </button>
@@ -470,10 +690,11 @@ function Fader({
         }}
         onPointerUp={endActive}
         onPointerCancel={endActive}
+        onLostPointerCapture={endActive}
       >
         −
       </button>
-      {lightSwitch ? (
+      {outputSwitch ? (
         <div className="fader-switch">
           <button
             type="button"
@@ -492,16 +713,15 @@ function Fader({
             Off
           </button>
         </div>
-      ) : (
-        <button
-          type="button"
-          className="fader-zero-btn"
-          aria-label={`${label} neutral`}
-          onClick={() => { onActive?.(true); onChange(0); onActive?.(false); }}
-        >
-          N
-        </button>
-      )}
+      ) : null}
+      <button
+        type="button"
+        className="fader-zero-btn"
+        aria-label={`${label} reset 0`}
+        onClick={() => { onActive?.(true); onChange(0); onActive?.(false); }}
+      >
+        0
+      </button>
       <div className="fader-label">{label}</div>
     </div>
   );

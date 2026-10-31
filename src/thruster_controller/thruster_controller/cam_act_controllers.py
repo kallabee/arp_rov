@@ -118,9 +118,17 @@ class CamActControllerPT(CamActControllerBase):
             config.tilt.max,
         )
 
-        if config.use_cam_act:
-            self.reset_servo(i2c_addr)
-        self.use_cam_act = config.use_cam_act
+        self.use_cam_act = bool(config.use_cam_act)
+        self.servo = None
+        self.cam_act_error: Exception | None = None
+        if self.use_cam_act:
+            try:
+                self.reset_servo(i2c_addr)
+            except Exception as exc:
+                # Missing pan/tilt PCA9685 must not take down thrusters/lights.
+                self.cam_act_error = exc
+                self.use_cam_act = False
+                self.servo = None
 
         self._picam2 = None
         self._focus_cfg: LibcameraFocusConfig | None = getattr(config, "focus", None)

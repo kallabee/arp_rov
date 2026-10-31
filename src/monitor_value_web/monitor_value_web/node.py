@@ -17,12 +17,16 @@ from light_actuator_interfaces.msg import LightActuator
 from monitor_value_interfaces.msg import ImuNavSnapshot, MonitorValue
 from monitor_value_web.camera_bridge import RosCameraBridge
 from monitor_value_web.command import (
+    HAND_KEYS,
+    TWIST_KEYS,
     hand_from_msg,
     hand_to_msg,
     lights_from_msg,
     lights_to_msg,
     twist_from_msg,
     twist_to_msg,
+    zero_hand,
+    zero_twist,
 )
 from monitor_value_web.config import load_web_config
 from monitor_value_web.convert import monitor_to_dict, snapshot_to_attitude
@@ -135,6 +139,8 @@ class MonitorValueWeb(Node):
         self._camera_bridge.attach(self, get_cli, set_cli)
         self.create_timer(0.05, self._camera_bridge.pump)
         self._pub_q: queue.Queue = queue.Queue()
+        self._hold_twist: Optional[dict] = None
+        self._hold_hand: Optional[dict] = None
         self.create_timer(0.02, self._drain_pub)
         self._state.publish_command = self._enqueue_command
         if os.environ.get("MONITOR_VALUE_WEB_DEMO") == "1":
@@ -168,20 +174,49 @@ class MonitorValueWeb(Node):
 
     def _enqueue_command(self, groups: dict) -> None:
         self._pub_q.put(groups)
+        if "twist" in groups:
+            data = groups["twist"]
+            if any(abs(float(data.get(k, 0.0))) > 1e-4 for k in TWIST_KEYS):
+                self._hold_twist = dict(data)
+            else:
+                self._hold_twist = None
+        if "hand" in groups:
+            data = groups["hand"]
+            if any(abs(float(data.get(k, 0.0))) > 1e-4 for k in HAND_KEYS):
+                self._hold_hand = dict(data)
+            else:
+                self._hold_hand = None
 
     def _drain_pub(self) -> None:
         names = list(self._cfg.get("lights") or [])
+        published_twist = False
+        published_hand = False
         try:
             while True:
                 groups = self._pub_q.get_nowait()
                 if "twist" in groups:
                     self._twist_pub.publish(twist_to_msg(groups["twist"], Twist))
+                    published_twist = True
                 if "hand" in groups:
                     self._hand_pub.publish(hand_to_msg(groups["hand"], HandActuator))
+                    published_hand = True
                 if "lights" in groups:
                     self._light_pub.publish(lights_to_msg(groups["lights"], names, LightActuator))
         except queue.Empty:
-            return
+            pass
+        live = self._state.dashboard_live()
+        if self._hold_twist is not None and live:
+            if not published_twist:
+                self._twist_pub.publish(twist_to_msg(self._hold_twist, Twist))
+        elif self._hold_twist is not None and not live:
+            self._hold_twist = None
+            self._twist_pub.publish(twist_to_msg(zero_twist(), Twist))
+        if self._hold_hand is not None and live:
+            if not published_hand:
+                self._hand_pub.publish(hand_to_msg(self._hold_hand, HandActuator))
+        elif self._hold_hand is not None and not live:
+            self._hold_hand = None
+            self._hand_pub.publish(hand_to_msg(zero_hand(), HandActuator))
 
     def _on_twist(self, msg: Twist) -> None:
         self._state.apply_remote_command("twist", twist_from_msg(msg))

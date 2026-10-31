@@ -14,6 +14,7 @@ from monitor_value_web.camera_bridge import CameraBridgeError, RosCameraBridge
 from monitor_value_web.command import (
     EchoFilter,
     default_command,
+    fingerprint,
     merge_lights,
     parse_hand,
     parse_lights,
@@ -60,9 +61,18 @@ class DashboardState:
         self._echo = EchoFilter(float(cfg.get("command", {}).get("echo_window_sec", 1.5)))
         self._active_until = {"twist": 0.0, "hand": 0.0, "lights": 0.0}
         self.publish_command: Optional[PublishFn] = None
+        self._stream_seen = 0.0
         self._camera_cache: Optional[dict[str, Any]] = None
         self._camera_cache_mono = 0.0
         self._camera_lock = threading.Lock()
+
+    def mark_stream(self) -> None:
+        with self._lock:
+            self._stream_seen = time.monotonic()
+
+    def dashboard_live(self, grace_sec: float = 2.5) -> bool:
+        with self._lock:
+            return (time.monotonic() - self._stream_seen) < grace_sec
 
     def _mtime(self) -> float:
         try:
@@ -187,21 +197,26 @@ class DashboardState:
                 groups["lights"] = parse_lights(payload.get("lights"), names)
             if not groups:
                 return dict(self._command)
+            changed = False
             for group, data in groups.items():
+                prev = self._command.get(group) or {}
+                if fingerprint(group, data) != fingerprint(group, prev if isinstance(prev, dict) else {}):
+                    changed = True
                 self._command[group] = data
                 self._active_until[group] = now + hold
                 self._echo.note(group, data)
-            self._command["origin"] = "http"
-            self._command["seq"] = int(self._command.get("seq") or 0) + 1
+            if changed:
+                self._command["origin"] = "http"
+                self._command["seq"] = int(self._command.get("seq") or 0) + 1
+                self._tick += 1
+                self._cond.notify_all()
             snapshot = {
                 "twist": dict(self._command["twist"]),
                 "hand": dict(self._command["hand"]),
                 "lights": dict(self._command["lights"]),
-                "origin": "http",
+                "origin": self._command.get("origin") or "http",
                 "seq": self._command["seq"],
             }
-            self._tick += 1
-            self._cond.notify_all()
         if self.publish_command is not None:
             self.publish_command(groups)
         return snapshot
@@ -372,6 +387,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         last = -1
         try:
             while True:
+                self.state.mark_stream()
                 last = self.state.wait_tick(last, timeout=1.0)
                 payload = json.dumps(self.state.snapshot(), allow_nan=False)
                 chunk = f"event: state\ndata: {payload}\n\n".encode("utf-8")

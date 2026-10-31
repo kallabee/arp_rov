@@ -8,11 +8,13 @@
 #   unit_scripts/start_dashboard.sh --status
 set -euo pipefail
 
+ORIG_ARGS=("$@")
 WS="$(cd "$(dirname "$0")/.." && pwd)"
 LOGDIR="${WS}/log/dashboard"
 MEDIAMTX_BIN="${MEDIAMTX_BIN:-/home/arp/mediamtx/mediamtx}"
 MEDIAMTX_DIR="$(dirname "${MEDIAMTX_BIN}")"
 WEB_PORT="${WEB_PORT:-8080}"
+ROS_DOCKER="${ROS_DOCKER:-jazzy}"
 
 YES=""
 NO=""
@@ -23,11 +25,15 @@ usage() {
 Usage: $(basename "$0") [-y|-n|--status]
 
 Start the ROS stack, thruster listener, and MediaMTX used by the dashboard.
-If something is already running, ask whether to restart it.
+If the ROS stack or thruster_controller is already running, ask whether to restart.
+MediaMTX (camera stream) is never restarted: leave it if up, start it only if down.
 
-  -y, --restart     Restart running processes without asking
+  -y, --restart     Restart running ROS/thruster processes without asking
   -n, --no-restart  Do not restart; start only processes that are down
   --status          Print what is running and exit
+  ROS_SETUP         Optional path to ROS setup.bash (default: /opt/ros/jazzy/setup.bash)
+  ROS_DOCKER        Docker container with ROS (default: jazzy). Used when this
+                    script is run on the host without /opt/ros.
 EOF
 }
 
@@ -84,10 +90,36 @@ count_pids() {
   echo "$n"
 }
 
+port_open() {
+  local port="$1"
+  python3 - "$port" <<'PY' 2>/dev/null
+import socket, sys
+s = socket.socket()
+s.settimeout(0.3)
+try:
+    s.connect(("127.0.0.1", int(sys.argv[1])))
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+}
+
+# MediaMTX may run on the host while ROS runs in docker (host network).
+# Detect by process or by the usual stream ports.
+mtx_up() {
+  [[ "$(count_pids "${MEDIAMTX_SPEC%%|*}")" -gt 0 ]] && return 0
+  local p
+  for p in 8889 8554 8888; do
+    port_open "$p" && return 0
+  done
+  return 1
+}
+
 print_status() {
   local spec pat name n
   echo "Dashboard processes:"
-  for spec in "${STACK_SPECS[@]}" "$THRUSTER_SPEC" "$MEDIAMTX_SPEC"; do
+  for spec in "${STACK_SPECS[@]}" "$THRUSTER_SPEC"; do
     pat="${spec%%|*}"
     name="${spec##*|}"
     n="$(count_pids "$pat")"
@@ -99,6 +131,11 @@ print_status() {
       printf '  %-36s running (%s copies)\n' "$name" "$n"
     fi
   done
+  if mtx_up; then
+    printf '  %-36s running\n' "mediamtx"
+  else
+    printf '  %-36s down\n' "mediamtx"
+  fi
 }
 
 stack_running() {
@@ -206,13 +243,99 @@ ask_restart() {
   [[ "$ans" =~ ^[yY] ]]
 }
 
+find_ros_setup() {
+  local cand
+  if [[ -n "${ROS_SETUP:-}" ]]; then
+    printf '%s\n' "${ROS_SETUP}"
+    return 0
+  fi
+  for cand in \
+    "/opt/ros/${ROS_DISTRO:-jazzy}/setup.bash" \
+    /opt/ros/jazzy/setup.bash \
+    /opt/ros/humble/setup.bash \
+    /opt/ros/iron/setup.bash
+  do
+    if [[ -r "$cand" ]]; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ros_available() {
+  find_ros_setup >/dev/null || command -v ros2 >/dev/null 2>&1
+}
+
+reexec_in_ros_docker() {
+  [[ -n "${INSIDE_ROS_DOCKER:-}" ]] && return 0
+  ros_available && return 0
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "ROS setup.bash not found (tried /opt/ros/${ROS_DISTRO:-jazzy}/setup.bash)." >&2
+    echo "This host has no ROS install. Enter the jazzy container, or set ROS_SETUP." >&2
+    echo "  docker exec -it ${ROS_DOCKER} /bin/bash" >&2
+    echo "  cd ${WS} && ./start_dashboard.sh" >&2
+    exit 1
+  fi
+  local running=""
+  running="$(docker inspect -f '{{.State.Running}}' "${ROS_DOCKER}" 2>/dev/null || true)"
+  if [[ -z "$running" ]]; then
+    echo "ROS is not on this host, and docker container '${ROS_DOCKER}' does not exist." >&2
+    echo "Create it with --name ${ROS_DOCKER}, or set ROS_DOCKER to the running container name." >&2
+    exit 1
+  fi
+  if [[ "$running" != "true" ]]; then
+    echo "Starting docker container '${ROS_DOCKER}'..."
+    docker start "${ROS_DOCKER}" >/dev/null
+  fi
+  echo "ROS is in docker container '${ROS_DOCKER}'; continuing there (MediaMTX stays on the host)."
+  local flags=(
+    -u "$(id -u):$(id -g)"
+    -w "${WS}"
+    -e INSIDE_ROS_DOCKER=1
+    -e HOME="${HOME:-/home/arp}"
+    -e USER="${USER:-arp}"
+    -e WEB_PORT="${WEB_PORT}"
+    -e ROS_DOCKER="${ROS_DOCKER}"
+  )
+  [[ -t 0 ]] && flags+=(-i)
+  [[ -t 1 ]] && flags+=(-t)
+  exec docker exec "${flags[@]}" "${ROS_DOCKER}" /bin/bash "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" "${ORIG_ARGS[@]}"
+}
+
 source_ws() {
   export PYTHONPATH="${PYTHONPATH:-}:/usr/lib/aarch64-linux-gnu/python3.12/site-packages"
   export LIBCAMERA_DRM_FORMATS="${LIBCAMERA_DRM_FORMATS:-0}"
-  # shellcheck disable=SC1091
-  source /opt/ros/jazzy/setup.bash
-  # shellcheck disable=SC1091
-  source "${WS}/install/setup.bash"
+  local ros_setup=""
+  ros_setup="$(find_ros_setup || true)"
+  # ROS setup.bash probes optional vars like AMENT_TRACE_SETUP_FILES; with
+  # `set -u` that aborts. Disable nounset only while sourcing overlays.
+  set +u
+  if [[ -n "$ros_setup" ]]; then
+    # shellcheck disable=SC1090
+    source "$ros_setup"
+  elif command -v ros2 >/dev/null 2>&1; then
+    echo "ROS underlay not found; using ros2 already on PATH."
+  else
+    set -u
+    echo "ROS setup.bash not found inside this environment." >&2
+    exit 1
+  fi
+  export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-1}"
+  if [[ -f /home/arp/work/docker/fastdds.xml ]]; then
+    export FASTRTPS_DEFAULT_PROFILES_FILE="${FASTRTPS_DEFAULT_PROFILES_FILE:-/home/arp/work/docker/fastdds.xml}"
+    export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
+  fi
+  if [[ -r "${WS}/install/setup.bash" ]]; then
+    # shellcheck disable=SC1091
+    source "${WS}/install/setup.bash"
+  else
+    set -u
+    echo "Workspace overlay missing: ${WS}/install/setup.bash" >&2
+    echo "Build the workspace (colcon build) first." >&2
+    exit 1
+  fi
+  set -u
   cd "${WS}"
 }
 
@@ -251,9 +374,24 @@ start_stack() {
 
 start_thruster() {
   echo "Starting thruster_controller listener"
+  : >"${LOGDIR}/thruster.log"
   nohup ros2 run thruster_controller listener \
     >>"${LOGDIR}/thruster.log" 2>&1 &
   echo $! >"${LOGDIR}/thruster.pid"
+  local i
+  for i in $(seq 1 50); do
+    if grep -Eq 'Started\.|Light PWM ready|minimal_subscriber' "${LOGDIR}/thruster.log" 2>/dev/null; then
+      echo "thruster_controller is up"
+      return 0
+    fi
+    if ! kill -0 "$(cat "${LOGDIR}/thruster.pid")" 2>/dev/null; then
+      echo "thruster_controller exited during startup (lights/thrusters will not run):" >&2
+      tail -n 25 "${LOGDIR}/thruster.log" >&2 || true
+      return 0
+    fi
+    sleep 0.4
+  done
+  echo "Warning: thruster_controller still starting (ESC arm delay); see ${LOGDIR}/thruster.log" >&2
 }
 
 start_mediamtx() {
@@ -269,9 +407,28 @@ start_mediamtx() {
   )
 }
 
-host_hint() {
-  hostname -I 2>/dev/null | awk '{print $1}'
+lan_ipv4s() {
+  python3 - <<'PY'
+import fcntl, socket, struct, os
+skip = {"lo", "docker0"}
+names = sorted(os.listdir("/sys/class/net"))
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+for name in names:
+    if name in skip or name.startswith(("veth", "br-", "cni")):
+        continue
+    try:
+        ip = socket.inet_ntoa(fcntl.ioctl(
+            s.fileno(), 0x8915, struct.pack("256s", name.encode()[:15])
+        )[20:24])
+    except OSError:
+        continue
+    if ip.startswith("127.") or ip.startswith("172.17."):
+        continue
+    print(f"{name} {ip}")
+PY
 }
+
+reexec_in_ros_docker
 
 if [[ "$STATUS_ONLY" -eq 1 ]]; then
   print_status
@@ -312,17 +469,14 @@ if [[ "$(count_pids "${THRUSTER_SPEC%%|*}")" -gt 0 ]]; then
   fi
 fi
 
-if [[ "$(count_pids "${MEDIAMTX_SPEC%%|*}")" -gt 0 ]]; then
-  if ask_restart "Restart MediaMTX (camera stream)?" n; then
-    stop_pids $(collect_spec_pids "$MEDIAMTX_SPEC")
-    need_mtx_start=1
-  else
-    echo "Leaving MediaMTX as-is."
-    need_mtx_start=0
-  fi
+if mtx_up; then
+  echo "MediaMTX already running — leaving camera stream as-is."
+  need_mtx_start=0
 fi
 
-source_ws
+if [[ "$need_stack_start" -eq 1 || "$need_thruster_start" -eq 1 ]]; then
+  source_ws
+fi
 
 if [[ "$need_stack_start" -eq 1 ]]; then
   start_stack
@@ -338,13 +492,12 @@ if [[ "$need_stack_start" -eq 1 ]]; then
   wait_port "$WEB_PORT" "Dashboard" || true
 fi
 
-ip="$(host_hint)"
 echo
 echo "Logs: ${LOGDIR}/"
-if [[ -n "$ip" ]]; then
-  echo "Dashboard: http://${ip}:${WEB_PORT}/"
-else
-  echo "Dashboard: http://127.0.0.1:${WEB_PORT}/"
-fi
+echo "Dashboard: http://127.0.0.1:${WEB_PORT}/"
+lan_ipv4s | while read -r iface ip; do
+  [[ -z "${ip:-}" ]] && continue
+  echo "Dashboard: http://${ip}:${WEB_PORT}/  (${iface})"
+done
 echo
 print_status

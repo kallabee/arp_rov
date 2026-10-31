@@ -206,22 +206,32 @@ class ActuatorSubscriber(Node):
 
         self.reset_servo()
 
-        pt_yaml = _resolve_cam_act_pt_yaml()
-        pt_cfg = CamActPTConfig.load(pt_yaml)
-        d = reg.get_i2c("cam_act")
-        if d.linux_bus is None:
-            raise ValueError("device cam_act requires 'bus' in device_i2c.yaml")
-        # PTZ: load cam_act_ptz.yaml and use CamActControllerPTZ(ptz_cfg, linux_bus=d.linux_bus)
-        self.cac: CamActControllerBase = CamActControllerPT(
-            pt_cfg, linux_bus=d.linux_bus, i2c_addr=d.addr
-        )
-
         self.light_pwm = None
         try:
             self.light_pwm = open_light_pwm_driver()
             self.light_pwm.all_off()
+            self.get_logger().info("Light PWM ready on turtle1/lights")
         except Exception as exc:
             self.get_logger().warn(f"Light PWM disabled: {exc}")
+
+        self.cac: CamActControllerBase | None = None
+        try:
+            pt_yaml = _resolve_cam_act_pt_yaml()
+            pt_cfg = CamActPTConfig.load(pt_yaml)
+            d = reg.get_i2c("cam_act")
+            if d.linux_bus is None:
+                raise ValueError("device cam_act requires 'bus' in device_i2c.yaml")
+            # PTZ: load cam_act_ptz.yaml and use CamActControllerPTZ(ptz_cfg, linux_bus=d.linux_bus)
+            self.cac = CamActControllerPT(
+                pt_cfg, linux_bus=d.linux_bus, i2c_addr=d.addr
+            )
+            if self.cac.cam_act_error is not None:
+                self.get_logger().warn(
+                    f"Camera pan/tilt disabled ({self.cac.cam_act_error}); "
+                    "thrusters and lights still enabled"
+                )
+        except Exception as exc:
+            self.get_logger().warn(f"Camera actuator disabled: {exc}")
 
     def reset_servo(self) -> None:
         if self.enable_thrusters:
@@ -262,6 +272,8 @@ class ActuatorSubscriber(Node):
                 self.set_pwm(self.hand_channels[i], ha[i])
 
     def apply_cam_acts(self, ca: CameraActuator) -> None:
+        if self.cac is None:
+            return
         print("apply_cam_acts called.")
         self.cac.move(ca)
 
@@ -349,7 +361,7 @@ def main(args=None):
 
     minimal_subscriber = ActuatorSubscriber()
 
-    print("Started.")
+    print("Started.", flush=True)
 
     rclpy.spin(minimal_subscriber)
 
